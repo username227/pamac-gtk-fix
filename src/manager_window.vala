@@ -4114,7 +4114,8 @@ namespace Pamac {
 				database.config.check_aur_vcs_updates == default_config.check_aur_vcs_updates &&
 				database.config.enable_flatpak == default_config.enable_flatpak &&
 				database.config.check_flatpak_updates == default_config.check_flatpak_updates &&
-				database.config.aur_build_dir == default_config.aur_build_dir;
+				database.config.aur_build_dir == default_config.aur_build_dir &&
+				!default_config.download_updates;
 
 			if (shared_profile) {
 				shared_update_check_in_progress = true;
