@@ -469,6 +469,7 @@ namespace Pamac {
 		public bool enable_aur { get; private set; }
 		bool updates_checked;
 		bool vcs_check_in_progress;
+		bool shared_update_check_in_progress;
 		GenericArray<AlpmPackage> repos_updates;
 		GenericArray<AURPackage> aur_updates;
 		GenericArray<FlatpakPackage> flatpak_updates;
@@ -3985,79 +3986,185 @@ namespace Pamac {
 			refresh_updates (true);
 		}
 
+		// Rebuild complete native package objects and keep the original
+		// ignored/out-of-date/Flatpak handling. The shared worker only
+		// supplies the *refreshed source state*, never package UI strings.
+		void apply_update_lists (Updates updates) {
+			repos_updates = new GenericArray<AlpmPackage> ();
+			foreach (unowned AlpmPackage pkg in updates.repos_updates) {
+				repos_updates.add (pkg);
+			}
+			foreach (unowned AlpmPackage pkg in updates.ignored_repos_updates) {
+				repos_updates.add (pkg);
+				temporary_ignorepkgs.add (pkg.name);
+			}
+			aur_updates = new GenericArray<AURPackage> ();
+			foreach (unowned AURPackage pkg in updates.aur_updates) {
+				aur_updates.add (pkg);
+			}
+			foreach (unowned AURPackage pkg in updates.ignored_aur_updates) {
+				aur_updates.add (pkg);
+				temporary_ignorepkgs.add (pkg.name);
+			}
+			flatpak_updates = new GenericArray<FlatpakPackage> ();
+			foreach (unowned FlatpakPackage pkg in updates.flatpak_updates) {
+				flatpak_updates.add (pkg);
+			}
+			updates_checked = true;
+			if (view_stack.visible_child_name == "updates") {
+				populate_updates ();
+			} else {
+				this.set_cursor (new Gdk.Cursor.from_name ("default", null));
+			}
+		}
+
+		void shared_update_incomplete (int status) {
+			// Never show the "up to date" page after an incomplete scan.
+			// Keep previous update lists and allow a fresh user retry.
+			shared_update_check_in_progress = false;
+			updates_checked = false;
+			vcs_check_in_progress = false;
+			this.set_cursor (new Gdk.Cursor.from_name ("default", null));
+			checking_page.title = dgettext (null, "Update check incomplete");
+			if (status == 101) {
+				checking_page.description = dgettext (null,
+					"Development package checks were deferred while Pamac is building. Try again later.");
+			} else {
+				checking_page.description = dgettext (null,
+					"Could not complete the shared update check. Try again.");
+			}
+		}
+
+		void start_shared_update_check (bool check_aur_updates_backup) {
+			try {
+				var worker = new Subprocess.newv (
+					{"/usr/bin/pamac-checkupdates"},
+					SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_PIPE);
+				worker.communicate_utf8_async.begin (null, null, (obj, res) => {
+					int result = 103;
+					try {
+						string? lines;
+						string? diagnostics;
+						worker.communicate_utf8_async.end (res, out lines, out diagnostics);
+						if (worker.get_if_exited ()) {
+							result = worker.get_exit_status ();
+						}
+						if (diagnostics != null && diagnostics.strip () != "") {
+							warning ("Shared Pamac check: %s", diagnostics.strip ());
+						}
+						bool has_lines = lines != null && lines.strip () != "";
+						if ((result == 100 && !has_lines) ||
+							(result == 0 && has_lines)) {
+							result = 103;
+						}
+					} catch (Error e) {
+						warning ("Shared update check failed: %s", e.message);
+					}
+					if (result != 0 && result != 100) {
+						database.config.check_aur_updates = check_aur_updates_backup;
+						shared_update_incomplete (result);
+						return;
+					}
+					int expected_status = result;
+					// Read typed metadata under flock without cloning or
+					// running makepkg again. A real transaction still makes
+					// its own final decisions under the existing build lock.
+					database.get_updates_after_shared_check_async.begin ((obj2, res2) => {
+						database.config.check_aur_updates = check_aur_updates_backup;
+						var updates = database.get_updates_after_shared_check_async.end (res2);
+						uint count = updates.repos_updates.length +
+							updates.aur_updates.length + updates.flatpak_updates.length;
+						if (database.vcs_updates_deferred ||
+							!database.last_vcs_refresh_success ||
+							(expected_status == 100 && count == 0) ||
+							(expected_status == 0 && count != 0)) {
+							shared_update_incomplete (103);
+							return;
+						}
+						shared_update_check_in_progress = false;
+						apply_update_lists (updates);
+					});
+				});
+			} catch (Error e) {
+				warning ("Could not launch shared update check: %s", e.message);
+				database.config.check_aur_updates = check_aur_updates_backup;
+				shared_update_incomplete (103);
+			}
+		}
+
 		void refresh_updates (bool refresh_dbs) {
+			if (shared_update_check_in_progress) {
+				return;
+			}
 			vcs_check_in_progress = false;
 			checking_page.title = dgettext (null, "Checking for Updates");
 			checking_page.description = "";
 			packages_stack.visible_child_name = "checking";
 			this.set_cursor (new Gdk.Cursor.from_name ("progress", null));
 			bool check_aur_updates_backup = database.config.check_aur_updates;
-			database.config.check_aur_updates = check_aur_updates_backup && !local_config.software_mode;
+			database.config.check_aur_updates =
+				check_aur_updates_backup && !local_config.software_mode;
+
+			// Share only the unmodified /etc/pamac.conf profile. Software
+			// mode and preferences with different AUR/Flatpak scope must
+			// retain their original query. No cache results are reused
+			// across incompatible profiles.
+			var default_config = new Config ("/etc/pamac.conf");
+			bool shared_profile =
+				!local_config.software_mode && Posix.geteuid () != 0 &&
+				database.config.enable_aur == default_config.enable_aur &&
+				database.config.check_aur_updates == default_config.check_aur_updates &&
+				database.config.check_aur_vcs_updates == default_config.check_aur_vcs_updates &&
+				database.config.enable_flatpak == default_config.enable_flatpak &&
+				database.config.check_flatpak_updates == default_config.check_flatpak_updates &&
+				database.config.aur_build_dir == default_config.aur_build_dir;
+
+			if (shared_profile) {
+				shared_update_check_in_progress = true;
+				if (refresh_dbs) {
+					// An explicit GUI refresh must still sync the pacman
+					// databases, even if the coordinator's TTL is valid.
+					transaction.refresh_dbs_async.begin ((obj, res) => {
+						bool refreshed = transaction.refresh_dbs_async.end (res);
+						if (!refreshed) {
+							database.config.check_aur_updates = check_aur_updates_backup;
+							shared_update_incomplete (103);
+							return;
+						}
+						// Bypass cached results after the explicit refresh.
+						try {
+							UpdateCoordinator coordinator = Bus.get_proxy_sync (
+								BusType.SESSION,
+								"org.manjaro.pamac.UpdateCoordinator1",
+								"/org/manjaro/pamac/UpdateCoordinator1");
+							coordinator.invalidate ();
+						} catch (Error e) {
+							// Headless/unavailable coordinator: the CLI bridge
+							// falls back to its unchanged standalone checker.
+							message ("Coordinator cache unavailable: %s", e.message);
+						}
+						start_shared_update_check (check_aur_updates_backup);
+					});
+				} else {
+					start_shared_update_check (check_aur_updates_backup);
+				}
+				return;
+			}
+
+			// Different-scope GUI queries preserve their original behavior.
 			if (refresh_dbs) {
-				transaction.refresh_dbs_async.begin (()=> {
+				transaction.refresh_dbs_async.begin (() => {
 					database.get_updates_async.begin ((obj, res) => {
 						database.config.check_aur_updates = check_aur_updates_backup;
 						var updates = database.get_updates_async.end (res);
-						// copy updates in lists
-						repos_updates = new GenericArray<AlpmPackage> ();
-						foreach (unowned AlpmPackage pkg in updates.repos_updates) {
-							repos_updates.add (pkg);
-						}
-						foreach (unowned AlpmPackage pkg in updates.ignored_repos_updates) {
-							repos_updates.add (pkg);
-							temporary_ignorepkgs.add (pkg.name);
-						}
-						aur_updates = new GenericArray<AURPackage> ();
-						foreach (unowned AURPackage pkg in updates.aur_updates) {
-							aur_updates.add (pkg);
-						}
-						foreach (unowned AURPackage pkg in updates.ignored_aur_updates) {
-							aur_updates.add (pkg);
-							temporary_ignorepkgs.add (pkg.name);
-						}
-						flatpak_updates = new GenericArray<FlatpakPackage> ();
-						foreach (unowned FlatpakPackage pkg in updates.flatpak_updates) {
-							flatpak_updates.add (pkg);
-						}
-						updates_checked = true;
-						if (view_stack.visible_child_name == "updates") {
-							populate_updates ();
-						} else {
-							this.set_cursor (new Gdk.Cursor.from_name ("default", null));
-						}
+						apply_update_lists (updates);
 					});
 				});
 			} else {
 				database.get_updates_async.begin ((obj, res) => {
 					database.config.check_aur_updates = check_aur_updates_backup;
 					var updates = database.get_updates_async.end (res);
-					// copy updates in lists
-					repos_updates = new GenericArray<AlpmPackage> ();
-					foreach (unowned AlpmPackage pkg in updates.repos_updates) {
-						repos_updates.add (pkg);
-					}
-					foreach (unowned AlpmPackage pkg in updates.ignored_repos_updates) {
-						repos_updates.add (pkg);
-						temporary_ignorepkgs.add (pkg.name);
-					}
-					aur_updates = new GenericArray<AURPackage> ();
-					foreach (unowned AURPackage pkg in updates.aur_updates) {
-						aur_updates.add (pkg);
-					}
-					foreach (unowned AURPackage pkg in updates.ignored_aur_updates) {
-						aur_updates.add (pkg);
-						temporary_ignorepkgs.add (pkg.name);
-					}
-					flatpak_updates = new GenericArray<FlatpakPackage> ();
-					foreach (unowned FlatpakPackage pkg in updates.flatpak_updates) {
-						flatpak_updates.add (pkg);
-					}
-					updates_checked = true;
-					if (view_stack.visible_child_name == "updates") {
-						populate_updates ();
-					} else {
-						this.set_cursor (new Gdk.Cursor.from_name ("default", null));
-					}
+					apply_update_lists (updates);
 				});
 			}
 		}
