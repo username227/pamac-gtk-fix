@@ -4159,6 +4159,12 @@ namespace Pamac {
 					database.get_updates_async.begin ((obj, res) => {
 						database.config.check_aur_updates = check_aur_updates_backup;
 						var updates = database.get_updates_async.end (res);
+						if (database.vcs_updates_deferred ||
+							!database.last_vcs_refresh_success) {
+							shared_update_incomplete (
+								database.vcs_updates_deferred ? 101 : 102);
+							return;
+						}
 						apply_update_lists (updates);
 					});
 				});
@@ -4166,6 +4172,12 @@ namespace Pamac {
 				database.get_updates_async.begin ((obj, res) => {
 					database.config.check_aur_updates = check_aur_updates_backup;
 					var updates = database.get_updates_async.end (res);
+					if (database.vcs_updates_deferred ||
+						!database.last_vcs_refresh_success) {
+						shared_update_incomplete (
+							database.vcs_updates_deferred ? 101 : 102);
+						return;
+					}
 					apply_update_lists (updates);
 				});
 			}
