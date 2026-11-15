@@ -468,6 +468,7 @@ namespace Pamac {
 
 		public bool enable_aur { get; private set; }
 		bool updates_checked;
+		bool vcs_check_in_progress;
 		GenericArray<AlpmPackage> repos_updates;
 		GenericArray<AURPackage> aur_updates;
 		GenericArray<FlatpakPackage> flatpak_updates;
@@ -894,6 +895,7 @@ namespace Pamac {
 
 			// database
 			database.get_updates_progress.connect (on_get_updates_progress);
+			database.vcs_refresh_progress.connect (on_vcs_refresh_progress);
 			updates_checked = false;
 
 			// transaction
@@ -3984,6 +3986,9 @@ namespace Pamac {
 		}
 
 		void refresh_updates (bool refresh_dbs) {
+			vcs_check_in_progress = false;
+			checking_page.title = dgettext (null, "Checking for Updates");
+			checking_page.description = "";
 			packages_stack.visible_child_name = "checking";
 			this.set_cursor (new Gdk.Cursor.from_name ("progress", null));
 			bool check_aur_updates_backup = database.config.check_aur_updates;
@@ -4057,7 +4062,53 @@ namespace Pamac {
 			}
 		}
 
+		void on_vcs_refresh_progress (string pkgname, uint current, uint total, string stage) {
+			if (packages_stack.visible_child_name != "checking") {
+				return;
+			}
+			if (total == 0) {
+				return;
+			}
+			vcs_check_in_progress = true;
+			checking_page.title = "%s (%u/%u)".printf (
+				dgettext (null, "Checking development packages"), current, total);
+			string description;
+			switch (stage) {
+				case "start":
+					description = dgettext (null, "Checking source information");
+					break;
+				case "source":
+					description = dgettext (null, "Refreshing VCS sources");
+					break;
+				case "metadata":
+					description = dgettext (null, "Updating package metadata");
+					break;
+				case "done":
+					description = dgettext (null, "Development package checked");
+					break;
+				case "missing":
+					description = dgettext (null, "Package not found in AUR");
+					break;
+				case "clone-failed":
+				case "source-failed":
+				case "metadata-failed":
+					description = dgettext (null, "Source check failed");
+					break;
+				default:
+					description = dgettext (null, "Checking development package");
+					break;
+			}
+			checking_page.description = "%s — %s".printf (pkgname, description);
+		}
+
 		void on_get_updates_progress (uint percent) {
+			if (vcs_check_in_progress && percent < 100) {
+				return;
+			}
+			if (percent == 100) {
+				vcs_check_in_progress = false;
+				checking_page.description = "";
+			}
 			checking_page.title = "%s %u".printf (dgettext (null, "Checking for Updates"), percent) + " %";
 		}
 
