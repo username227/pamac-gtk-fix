@@ -4042,8 +4042,8 @@ namespace Pamac {
 					SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_PIPE);
 				worker.communicate_utf8_async.begin (null, null, (obj, res) => {
 					int result = 103;
+					string? lines = null;
 					try {
-						string? lines;
 						string? diagnostics;
 						worker.communicate_utf8_async.end (res, out lines, out diagnostics);
 						if (worker.get_if_exited ()) {
