@@ -4065,19 +4065,16 @@ namespace Pamac {
 						shared_update_incomplete (result);
 						return;
 					}
-					int expected_status = result;
+					string shared_output = lines ?? "";
 					// Read typed metadata under flock without cloning or
 					// running makepkg again. A real transaction still makes
 					// its own final decisions under the existing build lock.
 					database.get_updates_after_shared_check_async.begin ((obj2, res2) => {
 						database.config.check_aur_updates = check_aur_updates_backup;
 						var updates = database.get_updates_after_shared_check_async.end (res2);
-						uint count = updates.repos_updates.length +
-							updates.aur_updates.length + updates.flatpak_updates.length;
 						if (database.vcs_updates_deferred ||
 							!database.last_vcs_refresh_success ||
-							(expected_status == 100 && count == 0) ||
-							(expected_status == 0 && count != 0)) {
+							!Database.updates_match_shared_output (updates, shared_output)) {
 							shared_update_incomplete (103);
 							return;
 						}
