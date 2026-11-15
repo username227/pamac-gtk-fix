@@ -44,6 +44,16 @@ namespace Pamac {
 					show_or_update_notification (updates_checker.updates_nb);
 				}
 			});
+			updates_checker.updates_incomplete.connect ((deferred) => {
+				// Never show "up to date" for an incomplete check. Preserve
+				// the last known icon and display an explicit status instead.
+				if (deferred) {
+					set_tooltip (_("Update check incomplete: development packages deferred while Pamac is building; previous status retained"));
+				} else {
+					set_tooltip (_("Update check incomplete: previous status retained"));
+				}
+				set_icon_visible (true);
+			});
 		}
 
 		public abstract void init_status_icon ();
