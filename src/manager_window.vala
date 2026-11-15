@@ -4037,8 +4037,10 @@ namespace Pamac {
 
 		void start_shared_update_check (bool check_aur_updates_backup) {
 			try {
+				// Join only a running or cached check. A fresh GTK view must
+				// not launch the standalone worker's database refresh.
 				var worker = new Subprocess.newv (
-					{"/usr/bin/pamac-checkupdates"},
+					{"/usr/bin/pamac-checkupdates", "--join-only"},
 					SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_PIPE);
 				worker.communicate_utf8_async.begin (null, null, (obj, res) => {
 					int result = 103;
@@ -4059,6 +4061,23 @@ namespace Pamac {
 						}
 					} catch (Error e) {
 						warning ("Shared update check failed: %s", e.message);
+					}
+					if (result == 104) {
+						// Nothing to reuse. Execute the original native typed
+						// query, with no coordinator-initiated DB changes.
+						database.get_updates_async.begin ((obj2, res2) => {
+							database.config.check_aur_updates = check_aur_updates_backup;
+							var updates = database.get_updates_async.end (res2);
+							if (database.vcs_updates_deferred ||
+								!database.last_vcs_refresh_success) {
+								shared_update_incomplete (
+									database.vcs_updates_deferred ? 101 : 102);
+								return;
+							}
+							shared_update_check_in_progress = false;
+							apply_update_lists (updates);
+						});
+						return;
 					}
 					if (result != 0 && result != 100) {
 						database.config.check_aur_updates = check_aur_updates_backup;
@@ -4117,41 +4136,26 @@ namespace Pamac {
 				database.config.aur_build_dir == default_config.aur_build_dir &&
 				!default_config.download_updates;
 
-			if (shared_profile) {
+			if (shared_profile && !refresh_dbs) {
 				shared_update_check_in_progress = true;
-				if (refresh_dbs) {
-					// An explicit GUI refresh must still sync the pacman
-					// databases, even if the coordinator's TTL is valid.
-					transaction.refresh_dbs_async.begin ((obj, res) => {
-						bool refreshed = transaction.refresh_dbs_async.end (res);
-						if (!refreshed) {
-							database.config.check_aur_updates = check_aur_updates_backup;
-							shared_update_incomplete (103);
-							return;
-						}
-						// Bypass cached results after the explicit refresh.
-						try {
-							UpdateCoordinator coordinator = Bus.get_proxy_sync (
-								BusType.SESSION,
-								"org.manjaro.pamac.UpdateCoordinator1",
-								"/org/manjaro/pamac/UpdateCoordinator1");
-							coordinator.invalidate ();
-						} catch (Error e) {
-							// Headless/unavailable coordinator: the CLI bridge
-							// falls back to its unchanged standalone checker.
-							message ("Coordinator cache unavailable: %s", e.message);
-						}
-						start_shared_update_check (check_aur_updates_backup);
-					});
-				} else {
-					start_shared_update_check (check_aur_updates_backup);
-				}
+				start_shared_update_check (check_aur_updates_backup);
 				return;
 			}
 
-			// Different-scope GUI queries preserve their original behavior.
+			// Explicit DB refreshes and different-scope GUI checks keep
+			// their original behavior. Invalidate any shared cached result
+			// after refreshing sync DBs, without initiating shared work.
 			if (refresh_dbs) {
 				transaction.refresh_dbs_async.begin (() => {
+					try {
+						UpdateCoordinator coordinator = Bus.get_proxy_sync (
+							BusType.SESSION,
+							"org.manjaro.pamac.UpdateCoordinator1",
+							"/org/manjaro/pamac/UpdateCoordinator1");
+						coordinator.invalidate ();
+					} catch (Error e) {
+						message ("Coordinator cache unavailable: %s", e.message);
+					}
 					database.get_updates_async.begin ((obj, res) => {
 						database.config.check_aur_updates = check_aur_updates_backup;
 						var updates = database.get_updates_async.end (res);
