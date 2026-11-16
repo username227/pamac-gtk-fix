@@ -3991,6 +3991,65 @@ namespace Pamac {
 			refresh_updates (true);
 		}
 
+		// Publish a complete default-profile native result directly to the
+		// coordinator. The tray hears CheckFinished immediately; it must not
+		// wait for the next hourly scan or re-run a successful VCS scan.
+		bool tray_profile_compatible () {
+			var default_config = new Config ("/etc/pamac.conf");
+			return !local_config.software_mode && Posix.geteuid () != 0 &&
+				database.config.enable_aur == default_config.enable_aur &&
+				database.config.check_aur_updates == default_config.check_aur_updates &&
+				database.config.check_aur_vcs_updates == default_config.check_aur_vcs_updates &&
+				database.config.enable_flatpak == default_config.enable_flatpak &&
+				database.config.check_flatpak_updates == default_config.check_flatpak_updates &&
+				database.config.aur_build_dir == default_config.aur_build_dir &&
+				!default_config.download_updates;
+		}
+
+		uint64 begin_tray_snapshot () {
+			try {
+				UpdateCoordinator coordinator = Bus.get_proxy_sync (
+					BusType.SESSION, "org.manjaro.pamac.UpdateCoordinator1",
+					"/org/manjaro/pamac/UpdateCoordinator1");
+				return coordinator.begin_external_check ();
+			} catch (Error e) {
+				message ("Could not begin shared tray snapshot: %s", e.message);
+				return 0;
+			}
+		}
+
+		void request_immediate_tray_check () {
+			try {
+				UpdateCoordinator coordinator = Bus.get_proxy_sync (
+					BusType.SESSION, "org.manjaro.pamac.UpdateCoordinator1",
+					"/org/manjaro/pamac/UpdateCoordinator1");
+				coordinator.recheck_after_transaction ();
+			} catch (Error e) {
+				message ("Could not request immediate tray check: %s", e.message);
+			}
+		}
+
+		void publish_tray_snapshot (uint64 epoch, Updates updates) {
+			if (epoch == 0) {
+				return;
+			}
+			string[] lines;
+			string[] repo_aur_lines;
+			Database.format_shared_update_lines (updates, out lines, out repo_aur_lines);
+			try {
+				UpdateCoordinator coordinator = Bus.get_proxy_sync (
+					BusType.SESSION, "org.manjaro.pamac.UpdateCoordinator1",
+					"/org/manjaro/pamac/UpdateCoordinator1");
+				if (!coordinator.publish_external_check (epoch, lines, repo_aur_lines)) {
+					// A transaction or second refresh superseded our snapshot.
+					// Verify again instead of publishing stale update data.
+					coordinator.recheck_after_transaction ();
+				}
+			} catch (Error e) {
+				warning ("Could not publish completed GTK update check: %s", e.message);
+			}
+		}
+
 		// Rebuild complete native package objects and keep the original
 		// ignored/out-of-date/Flatpak handling. The shared worker only
 		// supplies the *refreshed source state*, never package UI strings.
@@ -4132,6 +4191,7 @@ namespace Pamac {
 					if (result == 104) {
 						// Nothing to reuse. Execute the original native typed
 						// query, with no coordinator-initiated DB changes.
+						uint64 tray_epoch = begin_tray_snapshot ();
 						database.get_updates_async.begin ((obj2, res2) => {
 							database.config.check_aur_updates = check_aur_updates_backup;
 							var updates = database.get_updates_async.end (res2);
@@ -4139,9 +4199,11 @@ namespace Pamac {
 								!database.last_vcs_refresh_success) {
 								shared_update_incomplete (
 									database.vcs_updates_deferred ? 101 : 102);
+								request_immediate_tray_check ();
 								return;
 							}
 							shared_update_check_in_progress = false;
+							publish_tray_snapshot (tray_epoch, updates);
 							apply_update_lists (updates);
 						});
 						return;
@@ -4195,16 +4257,7 @@ namespace Pamac {
 			// mode and preferences with different AUR/Flatpak scope must
 			// retain their original query. No cache results are reused
 			// across incompatible profiles.
-			var default_config = new Config ("/etc/pamac.conf");
-			bool shared_profile =
-				!local_config.software_mode && Posix.geteuid () != 0 &&
-				database.config.enable_aur == default_config.enable_aur &&
-				database.config.check_aur_updates == default_config.check_aur_updates &&
-				database.config.check_aur_vcs_updates == default_config.check_aur_vcs_updates &&
-				database.config.enable_flatpak == default_config.enable_flatpak &&
-				database.config.check_flatpak_updates == default_config.check_flatpak_updates &&
-				database.config.aur_build_dir == default_config.aur_build_dir &&
-				!default_config.download_updates;
+			bool shared_profile = tray_profile_compatible ();
 
 			if (shared_profile && !refresh_dbs) {
 				shared_update_check_in_progress = true;
@@ -4217,14 +4270,18 @@ namespace Pamac {
 			// after refreshing sync DBs, without initiating shared work.
 			if (refresh_dbs) {
 				transaction.refresh_dbs_async.begin (() => {
-					try {
-						UpdateCoordinator coordinator = Bus.get_proxy_sync (
-							BusType.SESSION,
-							"org.manjaro.pamac.UpdateCoordinator1",
-							"/org/manjaro/pamac/UpdateCoordinator1");
-						coordinator.invalidate ();
-					} catch (Error e) {
-						message ("Coordinator cache unavailable: %s", e.message);
+					uint64 tray_epoch = 0;
+					if (shared_profile) {
+						tray_epoch = begin_tray_snapshot ();
+					} else {
+						try {
+							UpdateCoordinator coordinator = Bus.get_proxy_sync (
+								BusType.SESSION, "org.manjaro.pamac.UpdateCoordinator1",
+								"/org/manjaro/pamac/UpdateCoordinator1");
+							coordinator.invalidate ();
+						} catch (Error e) {
+							message ("Coordinator cache unavailable: %s", e.message);
+						}
 					}
 					database.get_updates_async.begin ((obj, res) => {
 						database.config.check_aur_updates = check_aur_updates_backup;
@@ -4233,7 +4290,15 @@ namespace Pamac {
 							!database.last_vcs_refresh_success) {
 							shared_update_incomplete (
 								database.vcs_updates_deferred ? 101 : 102);
+							request_immediate_tray_check ();
 							return;
+						}
+						if (shared_profile) {
+							publish_tray_snapshot (tray_epoch, updates);
+						} else {
+							// The GUI used a different AUR/Flatpak scope. The tray
+							// must independently verify its own default profile.
+							request_immediate_tray_check ();
 						}
 						apply_update_lists (updates);
 					});
@@ -4482,6 +4547,10 @@ namespace Pamac {
 			scroll_to_top = false;
 			updates_checked = false;
 			refresh_packages_list ();
+			// The installation may have modified ALPM or Flatpak state,
+			// including after a partially successful transaction. Trigger
+			// one event-driven tray recheck, never wait for the hourly timer.
+			request_immediate_tray_check ();
 		}
 	}
 }
