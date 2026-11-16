@@ -3973,11 +3973,11 @@ namespace Pamac {
 				(updates_checked || force_refresh) &&
 				!transaction.download_only && !transaction.dry_run &&
 				!transaction.no_refresh;
-			// The backend independently verifies a fresh source fingerprint
-			// while holding the exclusive AUR build lock. Use only for a
-			// normal, already checked default-profile upgrade.
+			// A fresh native GTK check can be reused even when its profile
+			// differs from the tray's default profile. The backend still
+			// checks source fingerprints and installed state under its lock.
 			bool reuse_checked_vcs = updates_checked && !force_refresh &&
-				tray_profile_compatible () && temporary_ignorepkgs.length == 0 &&
+				temporary_ignorepkgs.length == 0 &&
 				!transaction.no_refresh && !transaction.download_only &&
 				!transaction.dry_run;
 			run_transaction (no_confirm_upgrade, full_default_upgrade, reuse_checked_vcs);
@@ -4409,6 +4409,31 @@ namespace Pamac {
 		void on_vcs_refresh_progress (string pkgname, uint current, uint total, string stage) {
 			if (!transaction_running && packages_stack.visible_child_name != "checking") {
 				return;
+			}
+			// The transaction backend makes this decision while holding its
+			// exclusive AUR source lock. It may reuse a recent source scan,
+			// or fall back to a full refresh when state or age differs.
+			if (transaction_running) {
+				switch (stage) {
+					case "reuse":
+						transaction.show_details (dgettext (null,
+							"Reusing verified development package sources; no second VCS refresh."));
+						transaction.progress_box.action_label.label = dgettext (null,
+							"Reusing verified development package sources...");
+						return;
+					case "rescan":
+						transaction.show_details (dgettext (null,
+							"Cached development source check unavailable; refreshing sources."));
+						return;
+					case "aur-info":
+						transaction.show_details (dgettext (null,
+							"Checking AUR package metadata..."));
+						transaction.progress_box.action_label.label = dgettext (null,
+							"Checking AUR package metadata...");
+						return;
+					default:
+						break;
+				}
 			}
 			if (total == 0) {
 				return;
