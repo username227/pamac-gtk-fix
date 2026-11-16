@@ -4549,11 +4549,10 @@ namespace Pamac {
 			// The transaction already performed its update discovery and VCS
 			// work. Publish the terminal result directly, never start another
 			// shared check just because the operation finished.
-			bool verified_full_upgrade = success && tray_full_upgrade_in_progress &&
-				finish_tray_transaction (tray_transaction_id, success, true);
-			if (!verified_full_upgrade) {
-				finish_tray_transaction (tray_transaction_id, success, false);
-			}
+			bool full_default_upgrade = success && tray_full_upgrade_in_progress;
+			bool announced = finish_tray_transaction (
+				tray_transaction_id, success, full_default_upgrade);
+			bool verified_full_upgrade = full_default_upgrade && announced;
 			tray_transaction_id = 0;
 			tray_full_upgrade_in_progress = false;
 			if (success) {
