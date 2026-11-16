@@ -44,6 +44,25 @@ namespace Pamac {
 					show_or_update_notification (updates_checker.updates_nb);
 				}
 			});
+			updates_checker.updates_updating.connect (() => {
+				// The operation is already underway: keep the last known
+				// icon but report ongoing package work without delay.
+				set_tooltip (_("Updating packages..."));
+				set_icon_visible (true);
+			});
+			updates_checker.updates_operation_finished.connect ((success, verified) => {
+				if (verified) {
+					// A completed full-profile upgrade publishes its zero-update
+					// snapshot immediately via CheckFinished, no extra scan.
+					return;
+				}
+				if (success) {
+					set_tooltip (_("Package operation complete; update status not verified"));
+				} else {
+					set_tooltip (_("Package operation ended; previous update status retained"));
+				}
+				set_icon_visible (true);
+			});
 			updates_checker.updates_checking.connect (() => {
 				// Keep the last confirmed icon/count until a complete check
 				// arrives, but show immediately that we are checking.
