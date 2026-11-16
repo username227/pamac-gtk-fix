@@ -30,7 +30,10 @@ namespace Pamac {
 		construct {
 			// connect to signals
 			emit_warning.connect ((message) => {
-				if (message.length == 0) {
+				if (message.length == 0 ||
+					message == "Development package checks deferred while Pamac is building") {
+					// The Updates page handles lock contention non-modally and
+					// retries after the transaction releases its AUR source lock.
 					return;
 				}
 				var dialog = new Adw.MessageDialog (window, dgettext (null, "Error"), message);
