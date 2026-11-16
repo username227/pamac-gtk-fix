@@ -4125,11 +4125,6 @@ namespace Pamac {
 				uint64 tray_epoch = shared_profile ? begin_tray_snapshot () : 0;
 				database.get_updates_after_aur_unlock_async.begin ((obj, res) => {
 					var updates = database.get_updates_after_aur_unlock_async.end (res);
-					if (view_stack.visible_child_name != "updates") {
-						shared_update_check_in_progress = false;
-						updates_checked = false;
-						return;
-					}
 					if (database.vcs_updates_deferred) {
 						// Another transaction won a race to acquire the lock.
 						// Do not display partial data or spin on VCS work.
@@ -4138,13 +4133,20 @@ namespace Pamac {
 					}
 					if (!database.last_vcs_refresh_success) {
 						shared_update_incomplete (102);
+						request_immediate_tray_check ();
 						return;
 					}
-					shared_update_check_in_progress = false;
+					// Publish a verified result even if the user navigated away
+					// while the background native query was still running.
 					if (shared_profile) {
 						publish_tray_snapshot (tray_epoch, updates);
 					} else {
 						request_immediate_tray_check ();
+					}
+					shared_update_check_in_progress = false;
+					if (view_stack.visible_child_name != "updates") {
+						updates_checked = false;
+						return;
 					}
 					apply_update_lists (updates);
 				});
