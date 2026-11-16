@@ -4176,6 +4176,12 @@ namespace Pamac {
 						request_immediate_tray_check ();
 						return;
 					}
+					if (!database.last_flatpak_updates_success) {
+						// A failed Flatpak lookup is not an empty update list.
+						// Do not provoke another AUR scan for a Flatpak error.
+						shared_update_incomplete (103);
+						return;
+					}
 					// Publish a verified result even if the user navigated away
 					// while the background native query was still running.
 					if (shared_profile) {
@@ -4251,6 +4257,10 @@ namespace Pamac {
 								request_immediate_tray_check ();
 								return;
 							}
+							if (!database.last_flatpak_updates_success) {
+								shared_update_incomplete (103);
+								return;
+							}
 							shared_update_check_in_progress = false;
 							publish_tray_snapshot (tray_epoch, updates);
 							apply_update_lists (updates);
@@ -4274,6 +4284,7 @@ namespace Pamac {
 							return;
 						}
 						if (!database.last_vcs_refresh_success ||
+							!database.last_flatpak_updates_success ||
 							!Database.updates_match_shared_output (updates, shared_output)) {
 							shared_update_incomplete (103);
 							return;
@@ -4350,6 +4361,10 @@ namespace Pamac {
 							request_immediate_tray_check ();
 							return;
 						}
+						if (!database.last_flatpak_updates_success) {
+							shared_update_incomplete (103);
+							return;
+						}
 						if (shared_profile) {
 							publish_tray_snapshot (tray_epoch, updates);
 						} else {
@@ -4368,6 +4383,10 @@ namespace Pamac {
 						!database.last_vcs_refresh_success) {
 						shared_update_incomplete (
 							database.vcs_updates_deferred ? 101 : 102);
+						return;
+					}
+					if (!database.last_flatpak_updates_success) {
+						shared_update_incomplete (103);
 						return;
 					}
 					apply_update_lists (updates);
