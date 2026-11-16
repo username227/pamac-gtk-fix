@@ -3977,7 +3977,6 @@ namespace Pamac {
 			// differs from the tray's default profile. The backend still
 			// checks source fingerprints and installed state under its lock.
 			bool reuse_checked_vcs = updates_checked && !force_refresh &&
-				temporary_ignorepkgs.length == 0 &&
 				!transaction.no_refresh && !transaction.download_only &&
 				!transaction.dry_run;
 			run_transaction (no_confirm_upgrade, full_default_upgrade, reuse_checked_vcs);
@@ -4425,6 +4424,8 @@ namespace Pamac {
 					case "rescan":
 						transaction.show_details (dgettext (null,
 							"Cached development source check unavailable; refreshing sources."));
+						transaction.progress_box.action_label.label = dgettext (null,
+							"Refreshing development package sources...");
 						return;
 					case "aur-info":
 						transaction.show_details (dgettext (null,
