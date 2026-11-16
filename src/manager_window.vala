@@ -4121,6 +4121,8 @@ namespace Pamac {
 				this.set_cursor (new Gdk.Cursor.from_name ("progress", null));
 				// Reload libalpm handles, then run a complete native VCS scan.
 				// The last coordinator result may precede the other transaction.
+				bool shared_profile = tray_profile_compatible ();
+				uint64 tray_epoch = shared_profile ? begin_tray_snapshot () : 0;
 				database.get_updates_after_aur_unlock_async.begin ((obj, res) => {
 					var updates = database.get_updates_after_aur_unlock_async.end (res);
 					if (view_stack.visible_child_name != "updates") {
@@ -4139,6 +4141,11 @@ namespace Pamac {
 						return;
 					}
 					shared_update_check_in_progress = false;
+					if (shared_profile) {
+						publish_tray_snapshot (tray_epoch, updates);
+					} else {
+						request_immediate_tray_check ();
+					}
 					apply_update_lists (updates);
 				});
 				return false;
@@ -4269,7 +4276,15 @@ namespace Pamac {
 			// their original behavior. Invalidate any shared cached result
 			// after refreshing sync DBs, without initiating shared work.
 			if (refresh_dbs) {
-				transaction.refresh_dbs_async.begin (() => {
+				transaction.refresh_dbs_async.begin ((obj, res) => {
+					bool refresh_success = transaction.refresh_dbs_async.end (res);
+					if (!refresh_success) {
+						// A failed sync is not a verified update snapshot.
+						database.config.check_aur_updates = check_aur_updates_backup;
+						shared_update_incomplete (103);
+						request_immediate_tray_check ();
+						return;
+					}
 					uint64 tray_epoch = 0;
 					if (shared_profile) {
 						tray_epoch = begin_tray_snapshot ();
