@@ -4417,7 +4417,8 @@ namespace Pamac {
 				switch (stage) {
 					case "reuse":
 						transaction.show_details (dgettext (null,
-							"Reusing verified development package sources; no second VCS refresh."));
+							"Reusing verified development package sources for %u packages; no second VCS refresh.")
+							.printf (total));
 						transaction.progress_box.action_label.label = dgettext (null,
 							"Reusing verified development package sources...");
 						return;
