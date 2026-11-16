@@ -37,6 +37,9 @@ namespace Pamac {
 		public bool no_confirm_upgrade { get; set; }
 		bool summary_shown;
 		bool reboot_needed;
+		// The SONAME fallback is only permitted when the user explicitly
+		// chose normal dependency resolution in the current dialog.
+		bool soname_normal_fallback_confirmed = false;
 		public bool commit_transaction_answer;
 
 		public signal void transaction_sum_populated ();
@@ -228,6 +231,75 @@ namespace Pamac {
 			choose_provider_dialog.add_providers (pkgs);
 			int index = yield choose_provider_dialog.choose_provider ();
 			return index;
+		}
+
+		// The shared libpamac preflight already identifies provisional AUR
+		// SONAME dependencies and supports a build-first/final-verify route.
+		// GTK must ask for explicit consent instead of silently falling back
+		// to the normal dependency resolver (which can propose removals).
+		protected override async bool ask_unverified_aur_soname_build (
+			GenericArray<string> warnings) {
+			soname_normal_fallback_confirmed = false;
+			show_details (dgettext (null,
+				"Warning: AUR shared-library compatibility cannot be verified before building."));
+			foreach (unowned string warning in warnings) {
+				show_details ("  " + warning);
+			}
+			if (dry_run) {
+				// Never opt into provisional SONAME assumptions from a dry run.
+				return false;
+			}
+
+			var dialog = new Adw.MessageDialog (application.active_window,
+				dgettext (null, "Unverified AUR shared-library dependency"), null);
+			var body = new StringBuilder ();
+			body.append (dgettext (null,
+				"The AUR build metadata does not yet confirm these shared-library dependencies:"));
+			body.append ("\n\n");
+			foreach (unowned string warning in warnings) {
+				body.append ("• ");
+				body.append (warning);
+				body.append ("\n");
+			}
+			body.append ("\n");
+			body.append (dgettext (null,
+				"Build and Verify builds the AUR package first, then requires the completed package to pass normal dependency checks before installation. Dependent packages will not be removed automatically."));
+			body.append ("\n\n");
+			body.append (dgettext (null,
+				"Normal Resolution uses Pamac's original dependency handling and may propose removing dependent packages. Review any proposed removals before confirming the transaction."));
+			dialog.body = body.str;
+			dialog.resizable = true;
+			dialog.default_width = 760;
+			dialog.default_height = 290;
+
+			string cancel_id = "cancel";
+			string normal_id = "normal";
+			string verify_id = "verify";
+			dialog.add_response (cancel_id, dgettext (null, "_Cancel"));
+			dialog.add_response (normal_id, dgettext (null, "Normal Resolution"));
+			dialog.add_response (verify_id, dgettext (null, "Build and Verify"));
+			dialog.set_response_appearance (verify_id, Adw.ResponseAppearance.SUGGESTED);
+			dialog.default_response = cancel_id;
+			dialog.close_response = cancel_id;
+
+			string response = yield dialog.choose (null);
+			if (response == verify_id) {
+				show_details (dgettext (null,
+					"Build and Verify selected; final package dependencies must be verified before installation."));
+				return true;
+			}
+			if (response == normal_id) {
+				soname_normal_fallback_confirmed = true;
+				show_details (dgettext (null,
+					"Normal dependency resolution selected; inspect proposed removals before proceeding."));
+			} else {
+				show_details (dgettext (null, "SONAME dependency operation cancelled."));
+			}
+			return false;
+		}
+
+		protected override bool permit_normal_aur_soname_fallback () {
+			return soname_normal_fallback_confirmed && !dry_run;
 		}
 
 		protected override async bool ask_import_key (string pkgname, string key, string? owner) {
