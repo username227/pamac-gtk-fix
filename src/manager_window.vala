@@ -468,6 +468,8 @@ namespace Pamac {
 
 		public bool enable_aur { get; private set; }
 		bool updates_checked;
+		uint64 tray_transaction_id = 0;
+		bool tray_full_upgrade_in_progress = false;
 		bool vcs_check_in_progress;
 		bool shared_update_check_in_progress;
 		uint aur_unlock_wait_source = 0;
@@ -3899,7 +3901,10 @@ namespace Pamac {
 			}
 		}
 
-		void run_transaction (bool no_confirm_upgrade = false) {
+		void run_transaction (bool no_confirm_upgrade = false,
+			bool full_default_upgrade = false) {
+			tray_full_upgrade_in_progress = full_default_upgrade;
+			tray_transaction_id = begin_tray_transaction ();
 			transaction.no_confirm_upgrade = no_confirm_upgrade;
 			transaction_running = true;
 			apply_button.sensitive = false;
@@ -3957,7 +3962,13 @@ namespace Pamac {
 					transaction.add_flatpak_to_upgrade (pkg);
 				}
 			}
-			run_transaction (no_confirm_upgrade);
+			bool full_default_upgrade =
+				tray_profile_compatible () &&
+				temporary_ignorepkgs.length == 0 &&
+				(updates_checked || force_refresh) &&
+				!transaction.download_only && !transaction.dry_run &&
+				!transaction.no_refresh;
+			run_transaction (no_confirm_upgrade, full_default_upgrade);
 		}
 
 		[GtkCallback]
@@ -4015,6 +4026,35 @@ namespace Pamac {
 			} catch (Error e) {
 				message ("Could not begin shared tray snapshot: %s", e.message);
 				return 0;
+			}
+		}
+
+		uint64 begin_tray_transaction () {
+			try {
+				UpdateCoordinator coordinator = Bus.get_proxy_sync (
+					BusType.SESSION, "org.manjaro.pamac.UpdateCoordinator1",
+					"/org/manjaro/pamac/UpdateCoordinator1");
+				return coordinator.begin_transaction ();
+			} catch (Error e) {
+				message ("Could not announce GTK transaction: %s", e.message);
+				return 0;
+			}
+		}
+
+		bool finish_tray_transaction (uint64 transaction_id, bool success,
+			bool full_default_upgrade) {
+			if (transaction_id == 0) {
+				return false;
+			}
+			try {
+				UpdateCoordinator coordinator = Bus.get_proxy_sync (
+					BusType.SESSION, "org.manjaro.pamac.UpdateCoordinator1",
+					"/org/manjaro/pamac/UpdateCoordinator1");
+				coordinator.finish_transaction (transaction_id, success, full_default_upgrade);
+				return true;
+			} catch (Error e) {
+				message ("Could not announce completed GTK transaction: %s", e.message);
+				return false;
 			}
 		}
 
@@ -4506,6 +4546,16 @@ namespace Pamac {
 		}
 
 		void on_transaction_finished (bool success) {
+			// The transaction already performed its update discovery and VCS
+			// work. Publish the terminal result directly, never start another
+			// shared check just because the operation finished.
+			bool verified_full_upgrade = success && tray_full_upgrade_in_progress &&
+				finish_tray_transaction (tray_transaction_id, success, true);
+			if (!verified_full_upgrade) {
+				finish_tray_transaction (tray_transaction_id, success, false);
+			}
+			tray_transaction_id = 0;
+			tray_full_upgrade_in_progress = false;
 			if (success) {
 				if (this.is_active) {
 					show_in_app_notification (dgettext (null, "Transaction successfully finished"));
@@ -4562,12 +4612,27 @@ namespace Pamac {
 			generate_mirrors_list = false;
 			refresh_details ();
 			scroll_to_top = false;
-			updates_checked = false;
-			refresh_packages_list ();
-			// The installation may have modified ALPM or Flatpak state,
-			// including after a partially successful transaction. Trigger
-			// one event-driven tray recheck, never wait for the hourly timer.
-			request_immediate_tray_check ();
+			updates_checked = verified_full_upgrade;
+			if (verified_full_upgrade) {
+				// A full successful default-profile upgrade is itself the
+				// completed check. Clear the GUI's applied update lists, too.
+				repos_updates = new GenericArray<AlpmPackage> ();
+				aur_updates = new GenericArray<AURPackage> ();
+				flatpak_updates = new GenericArray<FlatpakPackage> ();
+			}
+			if (view_stack.visible_child_name == "updates" && !verified_full_upgrade) {
+				// Do not let refresh_packages_list() invoke a second VCS scan.
+				// The user may explicitly Refresh when a custom/failed operation
+				// could not establish a complete default-profile result.
+				packages_stack.visible_child_name = "checking";
+				checking_page.title = dgettext (null, "Update status not verified");
+				checking_page.description = dgettext (null,
+					"Refresh to check available updates.");
+				apply_button.sensitive = false;
+				cancel_button.sensitive = false;
+			} else {
+				refresh_packages_list ();
+			}
 		}
 	}
 }
