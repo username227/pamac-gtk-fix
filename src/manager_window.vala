@@ -470,6 +470,7 @@ namespace Pamac {
 		bool updates_checked;
 		uint64 tray_transaction_id = 0;
 		bool tray_full_upgrade_in_progress = false;
+		bool previously_checked_updates_before_transaction = false;
 		bool vcs_check_in_progress;
 		bool shared_update_check_in_progress;
 		uint aur_unlock_wait_source = 0;
@@ -3902,7 +3903,11 @@ namespace Pamac {
 		}
 
 		void run_transaction (bool no_confirm_upgrade = false,
-			bool full_default_upgrade = false) {
+			bool full_default_upgrade = false,
+			bool reuse_checked_vcs = false) {
+			previously_checked_updates_before_transaction =
+				view_stack.visible_child_name == "updates" && updates_checked;
+			transaction.reuse_recent_vcs_sources = reuse_checked_vcs;
 			tray_full_upgrade_in_progress = full_default_upgrade;
 			tray_transaction_id = begin_tray_transaction ();
 			transaction.no_confirm_upgrade = no_confirm_upgrade;
@@ -3968,7 +3973,14 @@ namespace Pamac {
 				(updates_checked || force_refresh) &&
 				!transaction.download_only && !transaction.dry_run &&
 				!transaction.no_refresh;
-			run_transaction (no_confirm_upgrade, full_default_upgrade);
+			// The backend independently verifies a fresh source fingerprint
+			// while holding the exclusive AUR build lock. Use only for a
+			// normal, already checked default-profile upgrade.
+			bool reuse_checked_vcs = updates_checked && !force_refresh &&
+				tray_profile_compatible () && temporary_ignorepkgs.length == 0 &&
+				!transaction.no_refresh && !transaction.download_only &&
+				!transaction.dry_run;
+			run_transaction (no_confirm_upgrade, full_default_upgrade, reuse_checked_vcs);
 		}
 
 		[GtkCallback]
@@ -4395,15 +4407,12 @@ namespace Pamac {
 		}
 
 		void on_vcs_refresh_progress (string pkgname, uint current, uint total, string stage) {
-			if (packages_stack.visible_child_name != "checking") {
+			if (!transaction_running && packages_stack.visible_child_name != "checking") {
 				return;
 			}
 			if (total == 0) {
 				return;
 			}
-			vcs_check_in_progress = true;
-			checking_page.title = "%s (%u/%u)".printf (
-				dgettext (null, "Checking development packages"), current, total);
 			string description;
 			switch (stage) {
 				case "start":
@@ -4430,7 +4439,17 @@ namespace Pamac {
 					description = dgettext (null, "Checking development package");
 					break;
 			}
-			checking_page.description = "%s — %s".printf (pkgname, description);
+			if (transaction_running) {
+				// These are actual source refreshes performed by the running
+				// transaction, not a second rendering of the update-page scan.
+				transaction.show_details ("[%u/%u] %s: %s".printf (
+					current, total, pkgname, description));
+			} else {
+				vcs_check_in_progress = true;
+				checking_page.title = "%s (%u/%u)".printf (
+					dgettext (null, "Checking development packages"), current, total);
+				checking_page.description = "%s — %s".printf (pkgname, description);
+			}
 		}
 
 		void on_get_updates_progress (uint percent) {
@@ -4565,6 +4584,13 @@ namespace Pamac {
 		}
 
 		void on_transaction_finished (bool success) {
+			// An unsuccessful prepare or dependency resolution did not enter
+			// a package commit. Retain the existing update list in that case
+			// without running another VCS scan merely to redisplay it.
+			bool restore_unmodified_updates = !success &&
+				previously_checked_updates_before_transaction &&
+				!transaction.package_state_may_have_changed;
+			previously_checked_updates_before_transaction = false;
 			// The transaction already performed its update discovery and VCS
 			// work. Publish the terminal result directly, never start another
 			// shared check just because the operation finished.
@@ -4630,7 +4656,7 @@ namespace Pamac {
 			generate_mirrors_list = false;
 			refresh_details ();
 			scroll_to_top = false;
-			updates_checked = verified_full_upgrade;
+			updates_checked = verified_full_upgrade || restore_unmodified_updates;
 			if (verified_full_upgrade) {
 				// A full successful default-profile upgrade is itself the
 				// completed check. Clear the GUI's applied update lists, too.
@@ -4638,7 +4664,11 @@ namespace Pamac {
 				aur_updates = new GenericArray<AURPackage> ();
 				flatpak_updates = new GenericArray<FlatpakPackage> ();
 			}
-			if (view_stack.visible_child_name == "updates" && !verified_full_upgrade) {
+			if (view_stack.visible_child_name == "updates" && restore_unmodified_updates) {
+				// Failed preparation: the packages never reached the commit
+				// stage. Restore the prior update list and keep error details.
+				populate_updates ();
+			} else if (view_stack.visible_child_name == "updates" && !verified_full_upgrade) {
 				// Do not let refresh_packages_list() invoke a second VCS scan.
 				// The user may explicitly Refresh when a custom/failed operation
 				// could not establish a complete default-profile result.
