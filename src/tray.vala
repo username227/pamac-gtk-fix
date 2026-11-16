@@ -44,6 +44,12 @@ namespace Pamac {
 					show_or_update_notification (updates_checker.updates_nb);
 				}
 			});
+			updates_checker.updates_checking.connect (() => {
+				// Keep the last confirmed icon/count until a complete check
+				// arrives, but show immediately that we are checking.
+				set_tooltip (_("Checking for updates..."));
+				set_icon_visible (true);
+			});
 			updates_checker.updates_incomplete.connect ((deferred) => {
 				// Never show "up to date" for an incomplete check. Preserve
 				// the last known icon and display an explicit status instead.
