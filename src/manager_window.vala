@@ -481,6 +481,7 @@ namespace Pamac {
 		bool shared_update_check_in_progress;
 		bool update_check_in_progress;
 		bool update_check_failed;
+		bool repository_sync_in_progress;
 		uint aur_unlock_wait_source = 0;
 		GenericArray<AlpmPackage> repos_updates;
 		GenericArray<AURPackage> aur_updates;
@@ -647,6 +648,8 @@ namespace Pamac {
 			background_check_box.append (background_check_spinner);
 			background_check_box.append (background_check_label);
 			background_check_box.visible = false;
+			background_check_box.tooltip_text = dgettext (null,
+				"Browsing uses a read-only snapshot. Package changes wait until update checks finish.");
 			headerbar.pack_end (background_check_box);
 
 			current_screenshots = new GenericArray<Gtk.Picture> ();
@@ -2894,6 +2897,19 @@ namespace Pamac {
 		}
 
 		public void refresh_packages_list () {
+			if (repository_sync_in_progress && view_stack.visible_child_name != "updates") {
+				// A repository sync may replace ALPM databases and handles.
+				// Keep the catalog inert until it has completed; the longer
+				// read-only VCS scan can then run alongside browsing safely.
+				checking_page.title = dgettext (null, "Synchronizing package databases");
+				checking_page.description = dgettext (null,
+					"Package browsing will resume after synchronization.");
+				packages_stack.visible_child_name = "checking";
+				return;
+			}
+			if (update_check_in_progress && view_stack.visible_child_name != "updates") {
+				this.set_cursor (new Gdk.Cursor.from_name ("default", null));
+			}
 			switch (view_stack.visible_child_name) {
 				case "browse":
 					show_sidebar (true);
@@ -4308,6 +4324,7 @@ namespace Pamac {
 			// Never show the "up to date" page after an incomplete scan.
 			// Keep previous update lists and allow a fresh user retry.
 			shared_update_check_in_progress = false;
+			repository_sync_in_progress = false;
 			updates_checked = false;
 			update_check_failed = true;
 			vcs_check_in_progress = false;
@@ -4414,6 +4431,7 @@ namespace Pamac {
 				return;
 			}
 			update_check_failed = false;
+			repository_sync_in_progress = refresh_dbs;
 			vcs_check_in_progress = false;
 			// Clone the current settings into the independent scanner.
 			update_database.config.reload ();
@@ -4451,6 +4469,10 @@ namespace Pamac {
 			if (refresh_dbs) {
 				transaction.refresh_dbs_async.begin ((obj, res) => {
 					bool refresh_success = transaction.refresh_dbs_async.end (res);
+					repository_sync_in_progress = false;
+					if (view_stack.visible_child_name != "updates") {
+						refresh_packages_list ();
+					}
 					if (!refresh_success) {
 						// A failed sync is not a verified update snapshot.
 						update_database.config.check_aur_updates = check_aur_updates_backup;
