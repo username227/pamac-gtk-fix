@@ -459,6 +459,12 @@ namespace Pamac {
 
 		public TransactionGtk transaction;
 		public DatabaseGtk database { get; construct; }
+		// Separate ALPM handle for long-running, read-only update discovery.
+		DatabaseGtk update_database;
+		Gtk.Box background_check_box;
+		Gtk.Spinner background_check_spinner;
+		Gtk.Label background_check_label;
+		Gtk.Button retry_update_check_button;
 		public LocalConfig local_config;
 
 		public bool important_details;
@@ -473,6 +479,8 @@ namespace Pamac {
 		bool previously_checked_updates_before_transaction = false;
 		bool vcs_check_in_progress;
 		bool shared_update_check_in_progress;
+		bool update_check_in_progress;
+		bool update_check_failed;
 		uint aur_unlock_wait_source = 0;
 		GenericArray<AlpmPackage> repos_updates;
 		GenericArray<AURPackage> aur_updates;
@@ -523,6 +531,9 @@ namespace Pamac {
 				headerbar.set_show_end_title_buttons (false);
 			}
 			local_config = new LocalConfig ("%s/pamac/config".printf (Environment.get_user_config_dir ()));
+			// Never hold the manager's ALPM mutex during a VCS source scan.
+			update_database = new DatabaseGtk (new Config (database.config.conf_path));
+			update_database.window = this;
 			this.set_default_size ((int) local_config.width, (int) local_config.height);
 			if (local_config.maximized) {
 				this.maximize ();
@@ -619,6 +630,24 @@ namespace Pamac {
 			updated_page.title = dgettext (null, "Your system is up to date");
 			no_item_page.title = dgettext (null, "No package found");
 			checking_page.title = dgettext (null, "Checking for Updates");
+			retry_update_check_button = new Gtk.Button.with_label (dgettext (null, "Retry update check"));
+			retry_update_check_button.halign = Gtk.Align.CENTER;
+			retry_update_check_button.visible = false;
+			retry_update_check_button.clicked.connect (() => {
+				if (!update_check_in_progress && !transaction_running) {
+					refresh_updates (false);
+				}
+			});
+			checking_page.child = retry_update_check_button;
+			background_check_box = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6);
+			background_check_spinner = new Gtk.Spinner ();
+			background_check_label = new Gtk.Label (dgettext (null, "Checking for Updates"));
+			background_check_label.ellipsize = Pango.EllipsizeMode.END;
+			background_check_label.max_width_chars = 25;
+			background_check_box.append (background_check_spinner);
+			background_check_box.append (background_check_label);
+			background_check_box.visible = false;
+			headerbar.pack_end (background_check_box);
 
 			current_screenshots = new GenericArray<Gtk.Picture> ();
 
@@ -898,8 +927,10 @@ namespace Pamac {
 				}
 			});
 
-			// database
-			database.get_updates_progress.connect (on_get_updates_progress);
+			// Keep transaction progress on the manager DB, but long update
+			// discovery uses its own ALPM mutex and package-cache objects.
+			update_database.get_updates_progress.connect (on_get_updates_progress);
+			update_database.vcs_refresh_progress.connect (on_vcs_refresh_progress);
 			database.vcs_refresh_progress.connect (on_vcs_refresh_progress);
 			updates_checked = false;
 
@@ -2895,6 +2926,9 @@ namespace Pamac {
 					cancel_button.sensitive = false;
 					if (updates_checked) {
 						populate_updates ();
+					} else if (update_check_in_progress || update_check_failed) {
+						// Never start a second VCS scan just by switching tabs.
+						packages_stack.visible_child_name = "checking";
 					} else {
 						refresh_updates (false);
 					}
@@ -4013,6 +4047,23 @@ namespace Pamac {
 			refresh_updates (true);
 		}
 
+		void set_background_check_running (bool running) {
+			update_check_in_progress = running;
+			background_check_box.visible = running;
+			if (running) {
+				background_check_spinner.start ();
+				background_check_label.label = dgettext (null, "Checking for Updates");
+				retry_update_check_button.visible = false;
+			} else {
+				background_check_spinner.stop ();
+			}
+			set_pending_operations ();
+			if (running) {
+				apply_button.sensitive = false;
+				apply_button.remove_css_class ("suggested-action");
+			}
+		}
+
 		// Publish a complete default-profile native result directly to the
 		// coordinator. The tray hears CheckFinished immediately; it must not
 		// wait for the next hourly scan or re-run a successful VCS scan.
@@ -4126,6 +4177,9 @@ namespace Pamac {
 				flatpak_updates.add (pkg);
 			}
 			updates_checked = true;
+			update_check_failed = false;
+			shared_update_check_in_progress = false;
+			set_background_check_running (false);
 			if (view_stack.visible_child_name == "updates") {
 				populate_updates ();
 			} else {
@@ -4148,17 +4202,14 @@ namespace Pamac {
 			checking_page.title = dgettext (null, "Waiting for another Pamac operation");
 			checking_page.description = dgettext (null,
 				"The AUR build directory is in use. Pamac will check all updates when the operation finishes.");
+			background_check_label.label = dgettext (null, "Waiting for another Pamac operation");
 			this.set_cursor (new Gdk.Cursor.from_name ("default", null));
 			if (aur_unlock_wait_source != 0) {
 				return;
 			}
 			aur_unlock_wait_source = Timeout.add_seconds (1, () => {
-				if (view_stack.visible_child_name != "updates") {
-					aur_unlock_wait_source = 0;
-					shared_update_check_in_progress = false;
-					return false;
-				}
-				int lock_status = database.probe_aur_build_lock ();
+				// Retain the wait when the user switches to Browse or Search.
+				int lock_status = update_database.probe_aur_build_lock ();
 				if (lock_status == 0) {
 					return true;
 				}
@@ -4174,9 +4225,9 @@ namespace Pamac {
 				// The last coordinator result may precede the other transaction.
 				bool shared_profile = tray_profile_compatible ();
 				uint64 tray_epoch = shared_profile ? begin_tray_snapshot () : 0;
-				database.get_updates_after_aur_unlock_async.begin ((obj, res) => {
-					var updates = database.get_updates_after_aur_unlock_async.end (res);
-					if (database.vcs_updates_deferred) {
+				update_database.get_updates_after_aur_unlock_async.begin ((obj, res) => {
+					var updates = update_database.get_updates_after_aur_unlock_async.end (res);
+					if (update_database.vcs_updates_deferred) {
 						// Another transaction won a race to acquire the lock.
 						// Do not display partial data or spin on VCS work.
 						wait_for_aur_unlock ();
@@ -4200,11 +4251,8 @@ namespace Pamac {
 					} else {
 						request_immediate_tray_check ();
 					}
-					shared_update_check_in_progress = false;
-					if (view_stack.visible_child_name != "updates") {
-						updates_checked = false;
-						return;
-					}
+					// Apply only verified, complete updates; apply_update_lists
+					// does not overwrite the currently selected Browse/Search view.
 					apply_update_lists (updates);
 				});
 				return false;
@@ -4220,7 +4268,10 @@ namespace Pamac {
 			// Keep previous update lists and allow a fresh user retry.
 			shared_update_check_in_progress = false;
 			updates_checked = false;
+			update_check_failed = true;
 			vcs_check_in_progress = false;
+			set_background_check_running (false);
+			retry_update_check_button.visible = true;
 			this.set_cursor (new Gdk.Cursor.from_name ("default", null));
 			checking_page.title = dgettext (null, "Update check incomplete");
 			checking_page.description = dgettext (null,
@@ -4258,17 +4309,17 @@ namespace Pamac {
 						// Nothing to reuse. Execute the original native typed
 						// query, with no coordinator-initiated DB changes.
 						uint64 tray_epoch = begin_tray_snapshot ();
-						database.get_updates_async.begin ((obj2, res2) => {
-							database.config.check_aur_updates = check_aur_updates_backup;
-							var updates = database.get_updates_async.end (res2);
-							if (database.vcs_updates_deferred ||
-								!database.last_vcs_refresh_success) {
+						update_database.get_updates_async.begin ((obj2, res2) => {
+							update_database.config.check_aur_updates = check_aur_updates_backup;
+							var updates = update_database.get_updates_async.end (res2);
+							if (update_database.vcs_updates_deferred ||
+								!update_database.last_vcs_refresh_success) {
 								shared_update_incomplete (
-									database.vcs_updates_deferred ? 101 : 102);
+									update_database.vcs_updates_deferred ? 101 : 102);
 								request_immediate_tray_check ();
 								return;
 							}
-							if (!database.last_flatpak_updates_success) {
+							if (!update_database.last_flatpak_updates_success) {
 								shared_update_incomplete (103);
 								return;
 							}
@@ -4279,7 +4330,7 @@ namespace Pamac {
 						return;
 					}
 					if (result != 0 && result != 100) {
-						database.config.check_aur_updates = check_aur_updates_backup;
+						update_database.config.check_aur_updates = check_aur_updates_backup;
 						shared_update_incomplete (result);
 						return;
 					}
@@ -4287,15 +4338,15 @@ namespace Pamac {
 					// Read typed metadata under flock without cloning or
 					// running makepkg again. A real transaction still makes
 					// its own final decisions under the existing build lock.
-					database.get_updates_after_shared_check_async.begin ((obj2, res2) => {
-						database.config.check_aur_updates = check_aur_updates_backup;
-						var updates = database.get_updates_after_shared_check_async.end (res2);
-						if (database.vcs_updates_deferred) {
+					update_database.get_updates_after_shared_check_async.begin ((obj2, res2) => {
+						update_database.config.check_aur_updates = check_aur_updates_backup;
+						var updates = update_database.get_updates_after_shared_check_async.end (res2);
+						if (update_database.vcs_updates_deferred) {
 							shared_update_incomplete (101);
 							return;
 						}
-						if (!database.last_vcs_refresh_success ||
-							!database.last_flatpak_updates_success ||
+						if (!update_database.last_vcs_refresh_success ||
+							!update_database.last_flatpak_updates_success ||
 							!Database.updates_match_shared_output (updates, shared_output)) {
 							shared_update_incomplete (103);
 							return;
@@ -4306,23 +4357,40 @@ namespace Pamac {
 				});
 			} catch (Error e) {
 				warning ("Could not launch shared update check: %s", e.message);
-				database.config.check_aur_updates = check_aur_updates_backup;
+				update_database.config.check_aur_updates = check_aur_updates_backup;
 				shared_update_incomplete (103);
 			}
 		}
 
 		void refresh_updates (bool refresh_dbs) {
-			if (shared_update_check_in_progress) {
+			if (update_check_in_progress) {
+				if (view_stack.visible_child_name == "updates") {
+					packages_stack.visible_child_name = "checking";
+				}
 				return;
 			}
+			if (transaction_running || generate_mirrors_list) {
+				return;
+			}
+			update_check_failed = false;
 			vcs_check_in_progress = false;
+			// Clone the current settings into the independent scanner.
+			update_database.config.reload ();
+			update_database.config.enable_aur = database.config.enable_aur;
+			update_database.config.enable_flatpak = database.config.enable_flatpak;
+			update_database.config.check_flatpak_updates = database.config.check_flatpak_updates;
+			update_database.config.aur_build_dir = database.config.aur_build_dir;
+			update_database.config.check_aur_updates =
+				database.config.check_aur_updates && !local_config.software_mode;
+			update_database.config.check_aur_vcs_updates =
+				update_database.config.check_aur_updates && database.config.check_aur_vcs_updates;
+			update_database.refresh ();
 			checking_page.title = dgettext (null, "Checking for Updates");
 			checking_page.description = "";
 			packages_stack.visible_child_name = "checking";
+			set_background_check_running (true);
 			this.set_cursor (new Gdk.Cursor.from_name ("progress", null));
 			bool check_aur_updates_backup = database.config.check_aur_updates;
-			database.config.check_aur_updates =
-				check_aur_updates_backup && !local_config.software_mode;
 
 			// Share only the unmodified /etc/pamac.conf profile. Software
 			// mode and preferences with different AUR/Flatpak scope must
@@ -4344,11 +4412,14 @@ namespace Pamac {
 					bool refresh_success = transaction.refresh_dbs_async.end (res);
 					if (!refresh_success) {
 						// A failed sync is not a verified update snapshot.
-						database.config.check_aur_updates = check_aur_updates_backup;
+						update_database.config.check_aur_updates = check_aur_updates_backup;
 						shared_update_incomplete (103);
 						request_immediate_tray_check ();
 						return;
 					}
+					// A sync DB refresh happened through the transaction object.
+					// Reload the scanner's independent ALPM handles.
+					update_database.refresh ();
 					uint64 tray_epoch = 0;
 					if (shared_profile) {
 						tray_epoch = begin_tray_snapshot ();
@@ -4362,17 +4433,17 @@ namespace Pamac {
 							message ("Coordinator cache unavailable: %s", e.message);
 						}
 					}
-					database.get_updates_async.begin ((obj, res) => {
-						database.config.check_aur_updates = check_aur_updates_backup;
-						var updates = database.get_updates_async.end (res);
-						if (database.vcs_updates_deferred ||
-							!database.last_vcs_refresh_success) {
+					update_database.get_updates_async.begin ((obj, res) => {
+						update_database.config.check_aur_updates = check_aur_updates_backup;
+						var updates = update_database.get_updates_async.end (res);
+						if (update_database.vcs_updates_deferred ||
+							!update_database.last_vcs_refresh_success) {
 							shared_update_incomplete (
-								database.vcs_updates_deferred ? 101 : 102);
+								update_database.vcs_updates_deferred ? 101 : 102);
 							request_immediate_tray_check ();
 							return;
 						}
-						if (!database.last_flatpak_updates_success) {
+						if (!update_database.last_flatpak_updates_success) {
 							shared_update_incomplete (103);
 							return;
 						}
@@ -4387,16 +4458,16 @@ namespace Pamac {
 					});
 				});
 			} else {
-				database.get_updates_async.begin ((obj, res) => {
-					database.config.check_aur_updates = check_aur_updates_backup;
-					var updates = database.get_updates_async.end (res);
-					if (database.vcs_updates_deferred ||
-						!database.last_vcs_refresh_success) {
+				update_database.get_updates_async.begin ((obj, res) => {
+					update_database.config.check_aur_updates = check_aur_updates_backup;
+					var updates = update_database.get_updates_async.end (res);
+					if (update_database.vcs_updates_deferred ||
+						!update_database.last_vcs_refresh_success) {
 						shared_update_incomplete (
-							database.vcs_updates_deferred ? 101 : 102);
+							update_database.vcs_updates_deferred ? 101 : 102);
 						return;
 					}
-					if (!database.last_flatpak_updates_success) {
+					if (!update_database.last_flatpak_updates_success) {
 						shared_update_incomplete (103);
 						return;
 					}
@@ -4406,7 +4477,7 @@ namespace Pamac {
 		}
 
 		void on_vcs_refresh_progress (string pkgname, uint current, uint total, string stage) {
-			if (!transaction_running && packages_stack.visible_child_name != "checking") {
+			if (!transaction_running && !update_check_in_progress) {
 				return;
 			}
 			// The transaction backend makes this decision while holding its
@@ -4473,6 +4544,8 @@ namespace Pamac {
 					current, total, pkgname, description));
 			} else {
 				vcs_check_in_progress = true;
+				background_check_label.label = "%s (%u/%u)".printf (
+					dgettext (null, "Checking development packages"), current, total);
 				checking_page.title = "%s (%u/%u)".printf (
 					dgettext (null, "Checking development packages"), current, total);
 				checking_page.description = "%s — %s".printf (pkgname, description);
@@ -4488,6 +4561,9 @@ namespace Pamac {
 				checking_page.description = "";
 			}
 			checking_page.title = "%s %u".printf (dgettext (null, "Checking for Updates"), percent) + " %";
+			if (update_check_in_progress && !vcs_check_in_progress) {
+				background_check_label.label = checking_page.title;
+			}
 		}
 
 		void populate_updates () {
