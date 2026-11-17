@@ -482,6 +482,10 @@ namespace Pamac {
 		bool update_check_in_progress;
 		bool update_check_failed;
 		bool repository_sync_in_progress;
+		// A different Pamac process may own the build lock even when this
+		// window isn't checking updates. Never queue an unattended GUI run.
+		bool external_aur_lock_busy;
+		uint external_aur_lock_poll_source = 0;
 		uint aur_unlock_wait_source = 0;
 		GenericArray<AlpmPackage> repos_updates;
 		GenericArray<AURPackage> aur_updates;
@@ -981,6 +985,20 @@ namespace Pamac {
 			previous_to_install = new GenericSet<string?> (str_hash, str_equal);
 			previous_to_remove = new GenericSet<string?> (str_hash, str_equal);
 			previous_to_build = new GenericSet<string?> (str_hash, str_equal);
+			// Passive lock-state display only. The backend retains the
+			// authoritative cross-process flock for all package writes.
+			external_aur_lock_busy = other_pamac_aur_lock_busy ();
+			external_aur_lock_poll_source = Timeout.add_seconds (1, () => {
+				if (transaction_running || update_check_in_progress) {
+					return true;
+				}
+				bool blocked = other_pamac_aur_lock_busy ();
+				if (blocked != external_aur_lock_busy) {
+					external_aur_lock_busy = blocked;
+					set_pending_operations ();
+				}
+				return true;
+			});
 			to_update = new GenericSet<string?> (str_hash, str_equal);
 			temporary_ignorepkgs = new GenericSet<string?> (str_hash, str_equal);
 
@@ -1021,6 +1039,10 @@ namespace Pamac {
 				if (aur_unlock_wait_source != 0) {
 					Source.remove (aur_unlock_wait_source);
 					aur_unlock_wait_source = 0;
+				}
+				if (external_aur_lock_poll_source != 0) {
+					Source.remove (external_aur_lock_poll_source);
+					external_aur_lock_poll_source = 0;
 				}
 				// save window size
 				var local_conf = new HashTable<string,Variant> (str_hash, str_equal);
@@ -1171,8 +1193,12 @@ namespace Pamac {
 					}
 				}
 			}
-			// Local staging may update labels, but never enable Apply mid-scan.
-			if (update_check_in_progress) {
+			// Local staging may update labels, but never enable Apply
+			// during our scan or another Pamac process's AUR transaction.
+			if (!transaction_running && !update_check_in_progress) {
+				external_aur_lock_busy = other_pamac_aur_lock_busy ();
+			}
+			if (update_check_in_progress || repository_sync_in_progress || external_aur_lock_busy) {
 				apply_button.sensitive = false;
 				apply_button.remove_css_class ("suggested-action");
 			}
@@ -3958,7 +3984,8 @@ namespace Pamac {
 
 		[GtkCallback]
 		void on_menu_popover_shown () {
-			bool safe_to_start = !transaction_running && !update_check_in_progress;
+			bool safe_to_start = !transaction_running && !update_check_in_progress &&
+				!other_pamac_aur_lock_busy ();
 			preferences_action.set_enabled (safe_to_start);
 			refresh_action.set_enabled (safe_to_start);
 			install_local_action.set_enabled (safe_to_start);
@@ -4005,9 +4032,31 @@ namespace Pamac {
 			return pkgs;
 		}
 
+		// A queued selection is not permission to run after a different
+		// transaction releases its lock. Refuse *before* invoking
+		// transaction.run_async, which intentionally waits for flock.
+		// This is a UI preflight; libpamac's own lock is still authoritative.
+		bool other_pamac_aur_lock_busy () {
+			return database.config.support_aur &&
+				database.probe_aur_build_lock () != 1;
+		}
+
+		bool can_start_gui_transaction () {
+			if (update_check_in_progress || transaction_running ||
+				generate_mirrors_list || repository_sync_in_progress) {
+				return false;
+			}
+			external_aur_lock_busy = other_pamac_aur_lock_busy ();
+			if (external_aur_lock_busy) {
+				set_pending_operations ();
+				return false;
+			}
+			return true;
+		}
+
 		[GtkCallback]
 		void on_apply_button_clicked () {
-			if (update_check_in_progress || transaction_running || generate_mirrors_list) {
+			if (!can_start_gui_transaction ()) {
 				show_in_app_notification (dgettext (null,
 					"Finish the current operation before applying changes"));
 				return;
@@ -4028,8 +4077,9 @@ namespace Pamac {
 		void run_transaction (bool no_confirm_upgrade = false,
 			bool full_default_upgrade = false,
 			bool reuse_checked_vcs = false) {
-			// UI sensitivity is not a transaction lock.
-			if (update_check_in_progress || transaction_running || generate_mirrors_list) {
+			// Re-check at the actual transaction entry, including paths
+			// reached by delayed AUR build-file save callbacks.
+			if (!can_start_gui_transaction ()) {
 				return;
 			}
 			previously_checked_updates_before_transaction =
@@ -4081,7 +4131,13 @@ namespace Pamac {
 		}
 
 		void run_sysupgrade (bool force_refresh = false, bool no_confirm_upgrade = true) {
-			if (update_check_in_progress || transaction_running || generate_mirrors_list) {
+			if (!can_start_gui_transaction ()) {
+				return;
+			}
+			// Incomplete discovery is not an actionable upgrade snapshot.
+			if (!force_refresh && !updates_checked) {
+				show_in_app_notification (dgettext (null,
+					"Complete the update check before upgrading"));
 				return;
 			}
 			if (force_refresh
@@ -4372,7 +4428,10 @@ namespace Pamac {
 		}
 
 		void shared_update_incomplete (int status) {
-			if (status == 101) {
+			// --join-only may report an incomplete check while a different
+			// Pamac CLI process owns flock. Wait for the lock instead of
+			// showing a misleading failure or exposing partial updates.
+			if (status == 101 || update_database.probe_aur_build_lock () == 0) {
 				wait_for_aur_unlock ();
 				return;
 			}
