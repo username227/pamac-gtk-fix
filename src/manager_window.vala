@@ -4446,6 +4446,16 @@ namespace Pamac {
 			updates_checked = true;
 			update_check_failed = false;
 			shared_update_check_in_progress = false;
+			// Discovery ran on update_database to keep Browse/Search responsive.
+			// Transfer its verified VCS source coverage to the transaction's
+			// Database instance, where reuse is decided under the build lock.
+			// A mismatch, expired snapshot, or unavailable lock fails closed:
+			// the transaction still refreshes sources normally.
+			bool vcs_handoff_ok = database.adopt_verified_vcs_snapshot (update_database);
+			if (Environment.get_variable ("PAMAC_DEBUG_VCS_REUSE") == "1") {
+				message ("GTK verified VCS scan handoff: %s",
+					vcs_handoff_ok ? "accepted" : "not eligible; transaction will rescan");
+			}
 			set_background_check_running (false);
 			if (view_stack.visible_child_name == "updates") {
 				populate_updates ();
