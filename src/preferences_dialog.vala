@@ -85,6 +85,8 @@ namespace Pamac {
 		[GtkChild]
 		unowned Adw.SwitchRow check_flatpak_updates_button;
 		[GtkChild]
+		unowned Adw.SwitchRow remove_unused_flatpak_deps_button;
+		[GtkChild]
 		unowned Adw.PreferencesGroup snap_preferences_group;
 		[GtkChild]
 		unowned Adw.SwitchRow enable_snap_button;
@@ -271,6 +273,8 @@ namespace Pamac {
 			config.bind_property ("enable_flatpak", enable_flatpak_expander, "enable_expansion", BindingFlags.SYNC_CREATE | BindingFlags.BIDIRECTIONAL);
 			config.bind_property ("enable_flatpak", enable_flatpak_expander, "expanded", BindingFlags.SYNC_CREATE);
 			config.bind_property ("check_flatpak_updates", check_flatpak_updates_button, "active", BindingFlags.SYNC_CREATE | BindingFlags.BIDIRECTIONAL);
+			config.bind_property ("remove_unused_flatpak_deps", remove_unused_flatpak_deps_button,
+				"active", BindingFlags.SYNC_CREATE | BindingFlags.BIDIRECTIONAL);
 			config.bind_property ("support_snap", snap_preferences_group, "visible", BindingFlags.SYNC_CREATE);
 			config.bind_property ("enable_snap", enable_snap_button, "active", BindingFlags.SYNC_CREATE | BindingFlags.BIDIRECTIONAL);
 			// set_correct_focus
