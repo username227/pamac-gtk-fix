@@ -773,7 +773,7 @@ namespace Pamac {
 			// refresh databases action
 			refresh_action = new SimpleAction ("refresh-databases", null);
 			refresh_action.activate.connect (() => {
-				if (!transaction_running && !generate_mirrors_list) {
+				if (!transaction_running && !update_check_in_progress && !generate_mirrors_list) {
 					infobox_revealer.reveal_child = true;
 					run_sysupgrade (true, false);
 				}
@@ -794,6 +794,9 @@ namespace Pamac {
 			// install local action
 			install_local_action = new SimpleAction ("install-local", null);
 			install_local_action.activate.connect (() => {
+				if (update_check_in_progress || transaction_running) {
+					return;
+				}
 				var chooser = new Gtk.FileDialog ();
 				chooser.title = dgettext (null, "Install Local Packages");
 				var filters_list = new ListStore (typeof (Gtk.FileFilter));
@@ -823,6 +826,9 @@ namespace Pamac {
 			// preferences action
 			preferences_action = new SimpleAction ("preferences", null);
 			preferences_action.activate.connect (() => {
+				if (update_check_in_progress || transaction_running) {
+					return;
+				}
 				this.set_cursor (new Gdk.Cursor.from_name ("progress", null));
 				transaction.get_authorization_async.begin ((obj, res) => {
 					bool authorized = transaction.get_authorization_async.end (res);
@@ -1165,6 +1171,11 @@ namespace Pamac {
 					}
 				}
 			}
+			// Local staging may update labels, but never enable Apply mid-scan.
+			if (update_check_in_progress) {
+				apply_button.sensitive = false;
+				apply_button.remove_css_class ("suggested-action");
+			}
 		}
 
 		void create_all_listbox () {
@@ -1270,6 +1281,9 @@ namespace Pamac {
 		}
 
 		void on_mark_explicit_button_clicked (Gtk.Button button) {
+			if (update_check_in_progress || transaction_running) {
+				return;
+			}
 			transaction.set_pkgreason_async.begin (current_package_displayed.name, 0, //Alpm.Package.Reason.EXPLICIT
 													() => {
 				refresh_details ();
@@ -1290,7 +1304,7 @@ namespace Pamac {
 				label2.use_markup = true;
 				label2.halign = Gtk.Align.START;
 				details_grid.attach_next_to (label2, label, Gtk.PositionType.RIGHT);
-			} else if (!transaction_running
+			} else if (!transaction_running && !update_check_in_progress
 				&& detail_type == dgettext (null, "Install Reason")
 				&& detail == dgettext (null, "Installed as a dependency for another package")) {
 				var box = new Gtk.Box (Gtk.Orientation.VERTICAL, 12);
@@ -2027,7 +2041,7 @@ namespace Pamac {
 							install_button.margin_bottom = 3;
 							install_button.margin_start = 3;
 							install_button.margin_end = 3;
-							if (transaction_running || generate_mirrors_list) {
+							if (transaction_running || update_check_in_progress || generate_mirrors_list) {
 								install_button.sensitive = false;
 							} else {
 								install_button.clicked.connect ((button) => {
@@ -2154,6 +2168,13 @@ namespace Pamac {
 					}
 					break;
 				case "build_files":
+					// Populating build files can clone AUR sources.
+					if (update_check_in_progress) {
+						properties_stack.visible_child_name = "details";
+						show_in_app_notification (dgettext (null,
+							"Build files are unavailable during an update check"));
+						return;
+					}
 					if (current_build_files != current_package_displayed.name) {
 						this.set_cursor (new Gdk.Cursor.from_name ("progress", null));
 						database.get_aur_pkg_async.begin (current_package_displayed.name, (obj, res) => {
@@ -2214,7 +2235,7 @@ namespace Pamac {
 		void on_build_togglebutton_toggled () {
 			if (build_togglebutton.active) {
 				to_build.add (current_package_displayed.name);
-				if (properties_stack.visible_child_name == "build_files") {
+				if (properties_stack.visible_child_name == "build_files" && !update_check_in_progress) {
 					transaction.save_build_files_async.begin (current_package_displayed.name);
 				}
 			} else {
@@ -2226,6 +2247,9 @@ namespace Pamac {
 
 		[GtkCallback]
 		void on_reset_files_button_clicked () {
+			if (update_check_in_progress || transaction_running) {
+				return;
+			}
 			var aur_pkg = current_package_displayed as AURPackage;
 			transaction.populate_build_files_async.begin (aur_pkg.packagebase, true, true);
 		}
@@ -3875,9 +3899,10 @@ namespace Pamac {
 
 		[GtkCallback]
 		void on_menu_popover_shown () {
-			preferences_action.set_enabled (!transaction_running);
-			refresh_action.set_enabled (!transaction_running);
-			install_local_action.set_enabled (!transaction_running);
+			bool safe_to_start = !transaction_running && !update_check_in_progress;
+			preferences_action.set_enabled (safe_to_start);
+			refresh_action.set_enabled (safe_to_start);
+			install_local_action.set_enabled (safe_to_start);
 		}
 
 		[GtkCallback]
@@ -3923,6 +3948,11 @@ namespace Pamac {
 
 		[GtkCallback]
 		void on_apply_button_clicked () {
+			if (update_check_in_progress || transaction_running || generate_mirrors_list) {
+				show_in_app_notification (dgettext (null,
+					"Finish the current operation before applying changes"));
+				return;
+			}
 			details_button.sensitive = true;
 			if (view_stack.visible_child_name == "updates") {
 				run_sysupgrade ();
@@ -3939,6 +3969,10 @@ namespace Pamac {
 		void run_transaction (bool no_confirm_upgrade = false,
 			bool full_default_upgrade = false,
 			bool reuse_checked_vcs = false) {
+			// UI sensitivity is not a transaction lock.
+			if (update_check_in_progress || transaction_running || generate_mirrors_list) {
+				return;
+			}
 			previously_checked_updates_before_transaction =
 				view_stack.visible_child_name == "updates" && updates_checked;
 			transaction.reuse_recent_vcs_sources = reuse_checked_vcs;
@@ -3988,6 +4022,9 @@ namespace Pamac {
 		}
 
 		void run_sysupgrade (bool force_refresh = false, bool no_confirm_upgrade = true) {
+			if (update_check_in_progress || transaction_running || generate_mirrors_list) {
+				return;
+			}
 			if (force_refresh
 				|| repos_updates.length > 0
 				|| aur_updates.length > 0) {
@@ -4044,7 +4081,9 @@ namespace Pamac {
 
 		[GtkCallback]
 		void on_refresh_button_clicked () {
-			refresh_updates (true);
+			if (!update_check_in_progress && !transaction_running) {
+				refresh_updates (true);
+			}
 		}
 
 		void set_background_check_running (bool running) {
@@ -4198,7 +4237,9 @@ namespace Pamac {
 			vcs_check_in_progress = false;
 			apply_button.sensitive = false;
 			cancel_button.sensitive = false;
-			packages_stack.visible_child_name = "checking";
+			if (view_stack.visible_child_name == "updates") {
+				packages_stack.visible_child_name = "checking";
+			}
 			checking_page.title = dgettext (null, "Waiting for another Pamac operation");
 			checking_page.description = dgettext (null,
 				"The AUR build directory is in use. Pamac will check all updates when the operation finishes.");
@@ -4233,12 +4274,12 @@ namespace Pamac {
 						wait_for_aur_unlock ();
 						return;
 					}
-					if (!database.last_vcs_refresh_success) {
+					if (!update_database.last_vcs_refresh_success) {
 						shared_update_incomplete (102);
 						request_immediate_tray_check ();
 						return;
 					}
-					if (!database.last_flatpak_updates_success) {
+					if (!update_database.last_flatpak_updates_success) {
 						// A failed Flatpak lookup is not an empty update list.
 						// Do not provoke another AUR scan for a Flatpak error.
 						shared_update_incomplete (103);
