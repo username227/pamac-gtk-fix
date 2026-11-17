@@ -36,7 +36,12 @@ completion-notice behavior has been tested with a built application.
    package, the header reads `1 update available` and **stays visible**.
    Navigate the catalog without changing tabs; it must stay visible.
 3. Click the header notice. Confirm it disappears, the Updates view opens and
-   shows the discovered update, and no installation begins.
+   shows the discovered update, and no installation begins. Repeat the check
+   with a normal Updates tab click instead; that must show the same verified
+   list without starting a new discovery.
+   Also test the app/tray Updates action against an already-open manager:
+   both entry points now use the same show_updates_view() method; neither
+   should navigate through win.back or force a redundant refresh.
 4. Repeat steps 1–2, but click Apply in Browse instead. Confirm only the
    explicitly staged package is requested by Pamac; an unrelated update is
    not silently queued. After the transaction, enter Updates and refresh if
@@ -58,3 +63,28 @@ All code changes are contained in `src/manager_window.vala`; the existing
 libpamac upgrade engine, transaction confirmation and AUR lock rules are
 unchanged. This branch has not been compiled or interactively tested in
 the remote research environment.
+
+## Investigating an unexpected second scan
+
+In a **newly launched** Pamac Manager process with debugging enabled,
+the automatic discovery branch logs its state when someone opens Updates
+without a verified snapshot:
+
+```sh
+PAMAC_DEBUG_UPDATE_NAVIGATION=1 pamac-manager
+```
+
+Close any already-running manager first; otherwise the application can
+reuse the existing process without inheriting that environment variable.
+If the ordinary Updates tab runs a fresh check while the completed
+notice was visible, capture the log line beginning
+`Updates navigation started discovery`. The valid completed path
+(`updates_checked == true`) should show the current list instead,
+without calling `refresh_updates(false)`.
+
+A newly opened independent application instance cannot reuse another
+window's in-memory `updates_checked` flag, so do not equate a new
+process's first discovery with a redundant scan in an already-open
+window. No silent refresh suppression or stale-cache fallback has
+been added: if state is truly unverified, the original first-visit
+behavior remains in place pending further evidence.
