@@ -2212,7 +2212,32 @@ namespace Pamac {
 		}
 
 		[GtkCallback]
+		bool block_non_alpm_selection (Gtk.ToggleButton toggle, bool queued) {
+			if (!(update_check_in_progress || transaction_running) ||
+				!(current_package_displayed is SnapPackage ||
+				  current_package_displayed is FlatpakPackage)) {
+				return false;
+			}
+			if (toggle.active != queued) {
+				toggle.active = queued;
+				show_in_app_notification (dgettext (null,
+					"Snap and Flatpak selections are unavailable during package operations"));
+			}
+			// Unlike ALPM/AUR selections, these store live package objects.
+			// Do not stage those objects while another operation may replace them.
+			return true;
+		}
+
 		void on_install_togglebutton_toggled () {
+			bool queued = false;
+			if (current_package_displayed is SnapPackage) {
+				queued = snap_to_install.contains (current_package_displayed.name);
+			} else if (current_package_displayed is FlatpakPackage) {
+				queued = flatpak_to_install.contains (current_package_displayed.id);
+			}
+			if (block_non_alpm_selection (install_togglebutton, queued)) {
+				return;
+			}
 			if (install_togglebutton.active) {
 				if (current_package_displayed is SnapPackage) {
 					snap_to_install.insert (current_package_displayed.name, current_package_displayed as SnapPackage);
@@ -2259,6 +2284,15 @@ namespace Pamac {
 
 		[GtkCallback]
 		void on_remove_togglebutton_toggled () {
+			bool queued = false;
+			if (current_package_displayed is SnapPackage) {
+				queued = snap_to_remove.contains (current_package_displayed.name);
+			} else if (current_package_displayed is FlatpakPackage) {
+				queued = flatpak_to_remove.contains (current_package_displayed.id);
+			}
+			if (block_non_alpm_selection (remove_togglebutton, queued)) {
+				return;
+			}
 			if (remove_togglebutton.active) {
 				reinstall_togglebutton.active = false;
 				if (current_package_displayed is SnapPackage) {
@@ -2302,6 +2336,9 @@ namespace Pamac {
 
 		[GtkCallback]
 		void on_reinstall_togglebutton_toggled () {
+			if (block_non_alpm_selection (reinstall_togglebutton, false)) {
+				return;
+			}
 			if (reinstall_togglebutton.active) {
 				remove_togglebutton.active = false;
 				to_remove.remove (current_package_displayed.name);
@@ -3264,6 +3301,9 @@ namespace Pamac {
 
 		[GtkCallback]
 		void on_remove_all_button_clicked () {
+			if (update_check_in_progress || transaction_running) {
+				return;
+			}
 			foreach (unowned Package pkg in current_packages_list) {
 				if (!transaction.transaction_summary_contains (pkg.id) && pkg.installed_version != null
 					&& !database.should_hold (pkg.name)) {
@@ -3277,6 +3317,9 @@ namespace Pamac {
 
 		[GtkCallback]
 		void on_install_all_button_clicked () {
+			if (update_check_in_progress || transaction_running) {
+				return;
+			}
 			foreach (unowned Package pkg in current_packages_list) {
 				if (!transaction.transaction_summary_contains (pkg.id) && pkg.installed_version == null) {
 					to_install.add (pkg.name);
@@ -3288,6 +3331,9 @@ namespace Pamac {
 
 		[GtkCallback]
 		void on_ignore_all_button_clicked () {
+			if (update_check_in_progress || transaction_running) {
+				return;
+			}
 			foreach (unowned Package pkg in current_packages_list) {
 				to_update.remove (pkg.name);
 				temporary_ignorepkgs.add (pkg.name);
