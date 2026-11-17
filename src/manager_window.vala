@@ -660,13 +660,10 @@ namespace Pamac {
 			background_check_button.tooltip_text = dgettext (null,
 				"View update check progress");
 			background_check_button.clicked.connect (() => {
-				// The update count is an invitation to view the list, not an
-				// instruction to install it. Clicking never starts an upgrade.
-				if (!update_check_in_progress) {
-					dismiss_background_updates_notice ();
-				}
-				main_stack.visible_child_name = "browse";
-				view_stack.visible_child_name = "updates";
+				// The update count is an invitation to view the list, not
+				// permission to install. Use the same route as the application's
+				// existing Updates action.
+				show_updates_view ();
 			});
 			headerbar.pack_end (background_check_button);
 
@@ -3045,6 +3042,16 @@ namespace Pamac {
 						// Never start a second VCS scan just by switching tabs.
 						packages_stack.visible_child_name = "checking";
 					} else {
+						// Do not silently manufacture a cached update result.
+						// Emit a trace only when an explicit diagnostics switch
+						// is set, so a report of an unexpected scan can identify
+						// precisely which branch was taken.
+						if (Environment.get_variable ("PAMAC_DEBUG_UPDATE_NAVIGATION") == "1") {
+							message ("Updates navigation started discovery: checked=%s running=%s failed=%s",
+								updates_checked ? "true" : "false",
+								update_check_in_progress ? "true" : "false",
+								update_check_failed ? "true" : "false");
+						}
 						refresh_updates (false);
 					}
 					break;
@@ -3990,6 +3997,22 @@ namespace Pamac {
 					break;
 				default:
 					break;
+			}
+		}
+
+		// Open the Updates view without forcing a refresh or navigating
+		// through the Back action, which can restore a previous tab.
+		// This method serves both the completed-check notice and the
+		// application-level Updates action (e.g. launcher or tray menu).
+		public void show_updates_view () {
+			display_package_queue.clear ();
+			bool already_in_updates = view_stack.visible_child_name == "updates";
+			main_stack.visible_child_name = "browse";
+			browse_stack.visible_child_name = "packages";
+			view_stack.visible_child_name = "updates";
+			if (already_in_updates) {
+				// No visible-child notification is emitted if already selected.
+				refresh_packages_list ();
 			}
 		}
 
