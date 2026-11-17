@@ -36,7 +36,10 @@ completion-notice behavior has been tested with a built application.
    package, the header reads `1 update available` and **stays visible**.
    Navigate the catalog without changing tabs; it must stay visible.
 3. Click the header notice. Confirm it disappears, the Updates view opens and
-   shows the discovered update, and no installation begins.
+   shows the discovered update, and no installation begins. Separately,
+   navigate from Browse to the **ordinary Updates tab** after the same
+   completed check: it must display the cached verified list, not start
+   a second check. Returning to Browse and Updates again must not recheck.
 4. Repeat steps 1–2, but click Apply in Browse instead. Confirm only the
    explicitly staged package is requested by Pamac; an unrelated update is
    not silently queued. After the transaction, enter Updates and refresh if
@@ -51,6 +54,13 @@ completion-notice behavior has been tested with a built application.
    snapshot and the header correctly switches back to progress.
 9. Verify a narrow window's header, keyboard focus/clickability and relevant
    translations; no background scan should enable Apply prematurely.
+10. After an unrelated transaction invalidates the completed snapshot,
+    open the ordinary Updates tab. It must show `Update status not verified`
+    and request an explicit Refresh, rather than silently scanning or
+    presenting a stale list. Use the Refresh button and confirm a new
+    verified list replaces the old state.
+11. In a fresh manager window with no prior update check, the first visit
+    to Updates must still initiate the initial discovery.
 
 ## Scope
 
