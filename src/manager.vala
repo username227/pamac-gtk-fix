@@ -83,11 +83,10 @@ namespace Pamac {
 			var action = new SimpleAction ("updates", null);
 			action.activate.connect (() => {
 				var manager_window = get_manager_window ();
-				manager_window.display_package_queue.clear ();
-				manager_window.main_stack.visible_child_name = "browse";
-				manager_window.browse_stack.visible_child_name = "packages";
-				manager_window.view_stack.visible_child_name = "updates";
-				manager_window.activate_action ("back", null);
+				// Use the exact same navigation as the in-window update
+				// notice. Going through win.back can restore a previous
+				// view after Updates was already selected.
+				manager_window.show_updates_view ();
 				manager_window.present ();
 			});
 			this.add_action (action);
