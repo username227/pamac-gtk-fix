@@ -3055,6 +3055,8 @@ namespace Pamac {
 						checking_page.title = dgettext (null, "Update status not verified");
 						checking_page.description = dgettext (null,
 							"Refresh to check available updates.");
+						retry_update_check_button.label = dgettext (null, "Refresh");
+						retry_update_check_button.visible = true;
 						packages_stack.visible_child_name = "checking";
 					} else {
 						// First visit without a previous check retains the
@@ -4536,6 +4538,7 @@ namespace Pamac {
 			update_check_failed = true;
 			vcs_check_in_progress = false;
 			set_background_check_running (false);
+			retry_update_check_button.label = dgettext (null, "Retry update check");
 			retry_update_check_button.visible = true;
 			this.set_cursor (new Gdk.Cursor.from_name ("default", null));
 			checking_page.title = dgettext (null, "Update check incomplete");
