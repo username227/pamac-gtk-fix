@@ -661,7 +661,7 @@ namespace Pamac {
 				"View update check progress");
 			background_check_button.clicked.connect (() => {
 				// The update count is an invitation to view the list, not an
-				// instruction to install it. Only the Updates view upgrades.
+				// instruction to install it. Clicking never starts an upgrade.
 				if (!update_check_in_progress) {
 					dismiss_background_updates_notice ();
 				}
@@ -4254,7 +4254,10 @@ namespace Pamac {
 				}
 			}
 			foreach (unowned FlatpakPackage pkg in flatpak_updates) {
-				if (!temporary_ignorepkgs.contains (pkg.name)) {
+				// The Flatpak rows use IDs when changing ignore state.
+				// Accept either representation to avoid overcounting.
+				if (!temporary_ignorepkgs.contains (pkg.id) &&
+					!temporary_ignorepkgs.contains (pkg.name)) {
 					count++;
 				}
 			}
