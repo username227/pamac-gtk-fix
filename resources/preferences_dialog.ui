@@ -269,6 +269,12 @@ All AUR users should be familiar with the build process.</property>
                     <property name="title" translatable="yes">Check for updates</property>
                   </object>
                 </child>
+                <child>
+                  <object class="AdwSwitchRow" id="remove_unused_flatpak_deps_button">
+                    <property name="title" translatable="yes">Remove unused dependencies after uninstalling</property>
+                    <property name="subtitle" translatable="yes">Clean up Flatpak runtimes and extensions no longer needed by installed apps</property>
+                  </object>
+                </child>
               </object>
             </child>
           </object>
