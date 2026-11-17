@@ -641,7 +641,9 @@ namespace Pamac {
 			retry_update_check_button.visible = false;
 			retry_update_check_button.clicked.connect (() => {
 				if (!update_check_in_progress && !transaction_running) {
-					refresh_updates (false);
+					// A retry must re-sync pacman repositories as well as AUR/VCS.
+					// The previous check may have used older sync databases.
+					refresh_updates (true);
 				}
 			});
 			checking_page.child = retry_update_check_button;
@@ -3052,7 +3054,12 @@ namespace Pamac {
 								update_check_in_progress ? "true" : "false",
 								update_check_failed ? "true" : "false");
 						}
-						refresh_updates (false);
+						// Opening Updates is an actionable check, unlike the tray's
+						// periodic notification. Always sync pacman repositories
+						// before discovering repo, AUR/VCS and Flatpak updates;
+						// otherwise Apply may discover unlisted upgrades during
+						// its own mandatory sync.
+						refresh_updates (true);
 					}
 					break;
 				default:
