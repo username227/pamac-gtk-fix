@@ -461,6 +461,7 @@ namespace Pamac {
 		public DatabaseGtk database { get; construct; }
 		// Separate ALPM handle for long-running, read-only update discovery.
 		DatabaseGtk update_database;
+		Gtk.Button background_check_button;
 		Gtk.Box background_check_box;
 		Gtk.Spinner background_check_spinner;
 		Gtk.Label background_check_label;
@@ -481,6 +482,7 @@ namespace Pamac {
 		bool shared_update_check_in_progress;
 		bool update_check_in_progress;
 		bool update_check_failed;
+		bool background_updates_notice_pending;
 		bool repository_sync_in_progress;
 		// A different Pamac process may own the build lock even when this
 		// window isn't checking updates. Never queue an unattended GUI run.
@@ -645,15 +647,28 @@ namespace Pamac {
 			checking_page.child = retry_update_check_button;
 			background_check_box = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6);
 			background_check_spinner = new Gtk.Spinner ();
+			background_check_spinner.visible = false;
 			background_check_label = new Gtk.Label (dgettext (null, "Checking for Updates"));
 			background_check_label.ellipsize = Pango.EllipsizeMode.END;
 			background_check_label.max_width_chars = 25;
 			background_check_box.append (background_check_spinner);
 			background_check_box.append (background_check_label);
-			background_check_box.visible = false;
-			background_check_box.tooltip_text = dgettext (null,
-				"Browsing uses a read-only snapshot. Package changes wait until update checks finish.");
-			headerbar.pack_end (background_check_box);
+			background_check_button = new Gtk.Button ();
+			background_check_button.has_frame = false;
+			background_check_button.child = background_check_box;
+			background_check_button.visible = false;
+			background_check_button.tooltip_text = dgettext (null,
+				"View update check progress");
+			background_check_button.clicked.connect (() => {
+				// The update count is an invitation to view the list, not an
+				// instruction to install it. Only the Updates view upgrades.
+				if (!update_check_in_progress) {
+					dismiss_background_updates_notice ();
+				}
+				main_stack.visible_child_name = "browse";
+				view_stack.visible_child_name = "updates";
+			});
+			headerbar.pack_end (background_check_button);
 
 			current_screenshots = new GenericArray<Gtk.Picture> ();
 
@@ -3979,6 +3994,9 @@ namespace Pamac {
 		}
 
 		void on_view_stack_visible_child_changed () {
+			if (view_stack.visible_child_name == "updates") {
+				dismiss_background_updates_notice ();
+			}
 			refresh_packages_list ();
 		}
 
@@ -4085,6 +4103,9 @@ namespace Pamac {
 			previously_checked_updates_before_transaction =
 				view_stack.visible_child_name == "updates" && updates_checked;
 			transaction.reuse_recent_vcs_sources = reuse_checked_vcs;
+			// Applying a pending Browse/Search operation dismisses only the
+			// update notice. No discovered updates are added to this transaction.
+			dismiss_background_updates_notice ();
 			tray_full_upgrade_in_progress = full_default_upgrade;
 			tray_transaction_id = begin_tray_transaction ();
 			transaction.no_confirm_upgrade = no_confirm_upgrade;
@@ -4213,15 +4234,69 @@ namespace Pamac {
 			update_database.vcs_refresh_progress.connect (on_vcs_refresh_progress);
 		}
 
+		void dismiss_background_updates_notice () {
+			background_updates_notice_pending = false;
+			if (!update_check_in_progress) {
+				background_check_button.visible = false;
+			}
+		}
+
+		uint count_actionable_updates () {
+			uint count = 0;
+			foreach (unowned AlpmPackage pkg in repos_updates) {
+				if (!temporary_ignorepkgs.contains (pkg.name)) {
+					count++;
+				}
+			}
+			foreach (unowned AURPackage pkg in aur_updates) {
+				if (!temporary_ignorepkgs.contains (pkg.name)) {
+					count++;
+				}
+			}
+			foreach (unowned FlatpakPackage pkg in flatpak_updates) {
+				if (!temporary_ignorepkgs.contains (pkg.name)) {
+					count++;
+				}
+			}
+			return count;
+		}
+
+		void show_background_updates_notice () {
+			// Never announce a partial scan or a result already being viewed.
+			if (!updates_checked || update_check_failed ||
+				view_stack.visible_child_name == "updates" || transaction_running) {
+				dismiss_background_updates_notice ();
+				return;
+			}
+			uint count = count_actionable_updates ();
+			background_updates_notice_pending = count > 0;
+			if (background_updates_notice_pending) {
+				background_check_label.label = dngettext (null,
+					"%u update available", "%u updates available", count).printf (count);
+				background_check_button.tooltip_text = dgettext (null,
+					"Click to view available updates");
+				background_check_spinner.visible = false;
+				background_check_button.visible = true;
+			} else {
+				background_check_button.visible = false;
+			}
+		}
+
 		void set_background_check_running (bool running) {
 			update_check_in_progress = running;
-			background_check_box.visible = running;
 			if (running) {
+				background_updates_notice_pending = false;
+				background_check_button.visible = true;
+				background_check_spinner.visible = true;
 				background_check_spinner.start ();
 				background_check_label.label = dgettext (null, "Checking for Updates");
+				background_check_button.tooltip_text = dgettext (null,
+					"View update check progress");
 				retry_update_check_button.visible = false;
 			} else {
 				background_check_spinner.stop ();
+				background_check_spinner.visible = false;
+				background_check_button.visible = false;
 			}
 			set_pending_operations ();
 			if (running) {
@@ -4349,6 +4424,7 @@ namespace Pamac {
 			if (view_stack.visible_child_name == "updates") {
 				populate_updates ();
 			} else {
+				show_background_updates_notice ();
 				this.set_cursor (new Gdk.Cursor.from_name ("default", null));
 			}
 		}
