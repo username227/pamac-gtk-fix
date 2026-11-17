@@ -2211,7 +2211,6 @@ namespace Pamac {
 			}
 		}
 
-		[GtkCallback]
 		bool block_non_alpm_selection (Gtk.ToggleButton toggle, bool queued) {
 			if (!(update_check_in_progress || transaction_running) ||
 				!(current_package_displayed is SnapPackage ||
@@ -2228,6 +2227,7 @@ namespace Pamac {
 			return true;
 		}
 
+		[GtkCallback]
 		void on_install_togglebutton_toggled () {
 			bool queued = false;
 			if (current_package_displayed is SnapPackage) {
