@@ -475,9 +475,6 @@ namespace Pamac {
 
 		public bool enable_aur { get; private set; }
 		bool updates_checked;
-		// Once a check has started, tab navigation must never launch a
-		// second implicit scan. Invalidated results require explicit Refresh.
-		bool update_check_attempted;
 		uint64 tray_transaction_id = 0;
 		bool tray_full_upgrade_in_progress = false;
 		bool previously_checked_updates_before_transaction = false;
@@ -3047,20 +3044,7 @@ namespace Pamac {
 					} else if (update_check_in_progress || update_check_failed) {
 						// Never start a second VCS scan just by switching tabs.
 						packages_stack.visible_child_name = "checking";
-					} else if (update_check_attempted) {
-						// A completed check was invalidated (e.g. by a
-						// separate package transaction or changed settings).
-						// Do not recheck automatically, and never display
-						// its stale package list as a verified result.
-						checking_page.title = dgettext (null, "Update status not verified");
-						checking_page.description = dgettext (null,
-							"Refresh to check available updates.");
-						retry_update_check_button.label = dgettext (null, "Refresh");
-						retry_update_check_button.visible = true;
-						packages_stack.visible_child_name = "checking";
 					} else {
-						// First visit without a previous check retains the
-						// normal initial discovery behavior.
 						refresh_updates (false);
 					}
 					break;
@@ -4538,7 +4522,6 @@ namespace Pamac {
 			update_check_failed = true;
 			vcs_check_in_progress = false;
 			set_background_check_running (false);
-			retry_update_check_button.label = dgettext (null, "Retry update check");
 			retry_update_check_button.visible = true;
 			this.set_cursor (new Gdk.Cursor.from_name ("default", null));
 			checking_page.title = dgettext (null, "Update check incomplete");
@@ -4640,7 +4623,6 @@ namespace Pamac {
 			if (transaction_running || generate_mirrors_list) {
 				return;
 			}
-			update_check_attempted = true;
 			update_check_failed = false;
 			repository_sync_in_progress = refresh_dbs;
 			vcs_check_in_progress = false;
