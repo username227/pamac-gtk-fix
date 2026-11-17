@@ -532,9 +532,8 @@ namespace Pamac {
 				headerbar.set_show_end_title_buttons (false);
 			}
 			local_config = new LocalConfig ("%s/pamac/config".printf (Environment.get_user_config_dir ()));
-			// Never hold the manager's ALPM mutex during a VCS source scan.
-			update_database = new DatabaseGtk (new Config (database.config.conf_path));
-			update_database.window = this;
+			// Long update discovery always receives its own ALPM handle.
+			reset_update_database ();
 			this.set_default_size ((int) local_config.width, (int) local_config.height);
 			if (local_config.maximized) {
 				this.maximize ();
@@ -936,10 +935,8 @@ namespace Pamac {
 				}
 			});
 
-			// Keep transaction progress on the manager DB, but long update
-			// discovery uses its own ALPM mutex and package-cache objects.
-			update_database.get_updates_progress.connect (on_get_updates_progress);
-			update_database.vcs_refresh_progress.connect (on_vcs_refresh_progress);
+			// The scan-specific handlers are attached by reset_update_database().
+			// The manager DB retains only transaction progress.
 			database.vcs_refresh_progress.connect (on_vcs_refresh_progress);
 			updates_checked = false;
 
@@ -4148,6 +4145,18 @@ namespace Pamac {
 			}
 		}
 
+		// Construct a new read-only update-discovery database for each check.
+		// Database.refresh() is intentionally internal to libpamac and is
+		// unavailable from the installed GTK-facing VAPI. Recreating the
+		// scanner also guarantees fresh libalpm handles after a sync DB write
+		// without sharing or changing the manager's transaction database.
+		void reset_update_database () {
+			update_database = new DatabaseGtk (new Config (database.config.conf_path));
+			update_database.window = this;
+			update_database.get_updates_progress.connect (on_get_updates_progress);
+			update_database.vcs_refresh_progress.connect (on_vcs_refresh_progress);
+		}
+
 		void set_background_check_running (bool running) {
 			update_check_in_progress = running;
 			background_check_box.visible = running;
@@ -4479,8 +4488,8 @@ namespace Pamac {
 			update_check_failed = false;
 			repository_sync_in_progress = refresh_dbs;
 			vcs_check_in_progress = false;
-			// Clone the current settings into the independent scanner.
-			update_database.config.reload ();
+			// A fresh ALPM snapshot avoids reusing possibly stale handles.
+			reset_update_database ();
 			update_database.config.enable_aur = database.config.enable_aur;
 			update_database.config.enable_flatpak = database.config.enable_flatpak;
 			update_database.config.check_flatpak_updates = database.config.check_flatpak_updates;
@@ -4489,7 +4498,6 @@ namespace Pamac {
 				database.config.check_aur_updates && !local_config.software_mode;
 			update_database.config.check_aur_vcs_updates =
 				update_database.config.check_aur_updates && database.config.check_aur_vcs_updates;
-			update_database.refresh ();
 			checking_page.title = dgettext (null, "Checking for Updates");
 			checking_page.description = "";
 			packages_stack.visible_child_name = "checking";
@@ -4526,9 +4534,17 @@ namespace Pamac {
 						request_immediate_tray_check ();
 						return;
 					}
-					// A sync DB refresh happened through the transaction object.
-					// Reload the scanner's independent ALPM handles.
-					update_database.refresh ();
+					// The sync DB refresh may have replaced database files.
+					// Discard the scanner handle and open a fresh one.
+					reset_update_database ();
+					update_database.config.enable_aur = database.config.enable_aur;
+					update_database.config.enable_flatpak = database.config.enable_flatpak;
+					update_database.config.check_flatpak_updates = database.config.check_flatpak_updates;
+					update_database.config.aur_build_dir = database.config.aur_build_dir;
+					update_database.config.check_aur_updates =
+						database.config.check_aur_updates && !local_config.software_mode;
+					update_database.config.check_aur_vcs_updates =
+						update_database.config.check_aur_updates && database.config.check_aur_vcs_updates;
 					uint64 tray_epoch = 0;
 					if (shared_profile) {
 						tray_epoch = begin_tray_snapshot ();
