@@ -5177,14 +5177,12 @@ namespace Pamac {
 				var snapshot = upgrade_ignored_snapshot;
 				temporary_ignorepkgs.remove_all ();
 				if (snapshot != null) {
-					foreach (unowned string name in snapshot) {
-						temporary_ignorepkgs.add (name.dup ());
-					}
 					foreach (unowned AlpmPackage pkg in repos_updates) {
 						if (snapshot.contains (pkg.name)) {
 							unowned AlpmPackage? installed = database.get_installed_pkg (pkg.name);
 							if (installed == null || installed.version != pkg.version) {
 								ignored_repos.add (pkg);
+								temporary_ignorepkgs.add (pkg.name.dup ());
 							}
 						}
 					}
@@ -5193,12 +5191,14 @@ namespace Pamac {
 							unowned AlpmPackage? installed = database.get_installed_pkg (pkg.name);
 							if (installed == null || installed.version != pkg.version) {
 								ignored_aur.add (pkg);
+								temporary_ignorepkgs.add (pkg.name.dup ());
 							}
 						}
 					}
 					foreach (unowned FlatpakPackage pkg in flatpak_updates) {
 						if (snapshot.contains (pkg.name) || snapshot.contains (pkg.id)) {
 							ignored_flatpak.add (pkg);
+							temporary_ignorepkgs.add (pkg.name.dup ());
 						}
 					}
 				}
