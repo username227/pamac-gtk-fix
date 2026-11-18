@@ -4644,7 +4644,13 @@ namespace Pamac {
 					}
 					if (result != 0 && result != 100) {
 						update_database.config.check_aur_updates = check_aur_updates_backup;
-						shared_update_incomplete (result);
+						if (after_repo_sync && result != 101) {
+							// A cached check is only an optimization; coordinator
+							// errors must not prevent normal native discovery.
+							start_native_update_check_after_join (check_aur_updates_backup);
+						} else {
+							shared_update_incomplete (result);
+						}
 						return;
 					}
 					string shared_output = lines ?? "";
@@ -4685,7 +4691,11 @@ namespace Pamac {
 			} catch (Error e) {
 				warning ("Could not launch shared update check: %s", e.message);
 				update_database.config.check_aur_updates = check_aur_updates_backup;
-				shared_update_incomplete (103);
+				if (after_repo_sync) {
+					start_native_update_check_after_join (check_aur_updates_backup);
+				} else {
+					shared_update_incomplete (103);
+				}
 			}
 		}
 
