@@ -48,3 +48,37 @@ Both repository branches are **not yet compiled or locally tested**.
 Their integration branches remain unchanged after the previous tested GTK
 fast-forward. These are two physical Git branches in distinct repositories,
 but one named test configuration / one build cycle.
+ 
+## Regression found during the first combined test (2026-11-18)
+
+The VCS sources were successfully reused (19 packages, no second source
+refresh), and the transaction built and installed `iptvnator-git`
+`r3449.4e7ebc7-1 -> r3451.57e6792-1`. However, immediately afterward
+GTK incorrectly displayed it alongside the intentionally ignored `muffin`
+under **Ignored**.
+
+Cause: `transaction_sum_populated` calls `refresh_listbox_buttons()`,
+which programmatically deactivates rows contained in the transaction
+summary. The update-row `toggled` handler was interpreting that
+programmatic deactivation as a new user ignore and adding the upgraded
+package to `temporary_ignorepkgs`. The new ignored-row retention
+correctly preserved that set, but therefore exposed the unintended
+state mutation.
+
+The update-row handler now ignores toggle changes while
+`transaction_running` or while the post-upgrade ignored-only view is
+being displayed. Explicit ignore choices made before Apply are not
+affected. No coordinator, tray or libpamac changes were needed.
+
+Additional tests:
+
+- With `muffin` ignored, apply an available AUR/VCS upgrade such as
+  `iptvnator-git`. After success, **only muffin** must remain under
+  Ignored; the upgraded VCS package must not remain in Updates or Ignored.
+- Confirm a normal pre-transaction user click on a package checkbox
+  still deliberately adds/removes its ignored status.
+- Recheck that the tray clears immediately and the source snapshot is
+  reused. Switching tabs must not re-enable the ignored-only rows.
+
+This correction is committed for testing but **not yet built or
+runtime-verified**.
