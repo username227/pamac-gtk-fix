@@ -75,3 +75,42 @@ branch fixes the immediate stale-database discrepancy; it does not
 claim to solve every between-check-and-Apply race.
 
 GitHub source-only change: not compiled or interactively tested here.
+
+## UI progress: no phantom transaction during discovery
+
+When the GUI enters background update discovery, a repository/AUR
+synchronization can emit progress through `TransactionGtk.progress_box`
+even though no package installation has begun. That same progress box
+previously remained visible under the VCS status page, showing a fully
+completed `Refreshing AUR...` bar and implying an ongoing transaction.
+
+`set_background_check_running(true)` now hides the transaction progress
+widget for the *entire* discovery lifecycle, including ordinary GUI
+repository synchronization and its subsequent AUR/VCS scan. The existing
+checking-page title, detailed VCS progress and header indicator remain
+visible. When discovery completes or reports failure,
+`set_background_check_running(false)` resets the no-longer-active
+metadata-refresh progress and reveals the ordinary transaction controls.
+`set_pending_operations()` then restores the correct download-size or
+pending-operation text. Real package transactions retain their existing
+progress path; no libpamac logic changes.
+
+Additional manual regression checks:
+
+1. From a red tray icon, open Updates directly. While repository/AUR
+   synchronization and VCS scanning proceed, the bottom transaction-style
+   progress bar must **never** appear.
+2. Stay in Updates without switching tabs. Once scan completes, the
+   bottom must not contain a stale `Refreshing AUR...` progress bar;
+   normal Apply controls and any download-size summary should work.
+3. Switch to Browse mid-scan, then return. It must neither recreate a
+   stale transaction bar nor initiate a duplicate scan.
+4. Trigger a failed/incomplete update check. The bottom transaction
+   progress must not be stuck at 100%.
+5. Perform an actual package upgrade after verification. Its real
+   transaction progress and confirmation UI must remain visible.
+6. Test non-update Browse/Search pending operations alongside background
+   update discovery; their progress/selection state must recover when
+   the check completes.
+
+This is a source-only correction, not yet compiled or exercised locally.
