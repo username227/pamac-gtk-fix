@@ -477,6 +477,10 @@ namespace Pamac {
 		bool updates_checked;
 		// Retained ignored rows are informational until another full discovery.
 		bool retained_ignored_updates_after_upgrade = false;
+		// The definitive exclusions are captured before applying an upgrade;
+		// later programmatic widget toggles must not change what we retain.
+		GenericSet<string?>? upgrade_ignored_snapshot = null;
+		bool refreshing_listbox_buttons = false;
 		uint64 tray_transaction_id = 0;
 		bool tray_full_upgrade_in_progress = false;
 		bool previously_checked_updates_before_transaction = false;
@@ -2645,6 +2649,10 @@ namespace Pamac {
 					row.action_icon.icon_name = "software-select-symbolic";
 				}
 				row.action_togglebutton.toggled.connect ((button) => {
+					if (refreshing_listbox_buttons || transaction_running ||
+						retained_ignored_updates_after_upgrade) {
+						return;
+					}
 					if (button.active) {
 						to_update.add (pkg.id);
 						temporary_ignorepkgs.remove (pkg.id);
@@ -2868,7 +2876,8 @@ namespace Pamac {
 				// Transaction-summary and post-upgrade list refreshes change
 				// toggle state programmatically. They must not be interpreted
 				// as user requests to ignore an otherwise selected upgrade.
-				if (transaction_running || retained_ignored_updates_after_upgrade) {
+				if (refreshing_listbox_buttons || transaction_running ||
+					retained_ignored_updates_after_upgrade) {
 					return;
 				}
 				if (button.active) {
@@ -2890,6 +2899,10 @@ namespace Pamac {
 		}
 
 		void refresh_listbox_buttons () {
+			if (refreshing_listbox_buttons) {
+				return;
+			}
+			refreshing_listbox_buttons = true;
 			unowned Gtk.Widget? child = packages_listbox.get_first_child ();
 			while (child != null) {
 				unowned PackageRow pamac_row = child as PackageRow;
@@ -2989,6 +3002,7 @@ namespace Pamac {
 				}
 				child = child.get_next_sibling ();
 			}
+			refreshing_listbox_buttons = false;
 		}
 
 		public void refresh_packages_list () {
@@ -4153,6 +4167,16 @@ namespace Pamac {
 			}
 			previously_checked_updates_before_transaction =
 				view_stack.visible_child_name == "updates" && updates_checked;
+			// Snapshot the actual exclusions before GTK's transaction-summary
+			// callbacks can programmatically alter update-row toggles.
+			upgrade_ignored_snapshot = null;
+			if (full_default_upgrade && previously_checked_updates_before_transaction) {
+				var snapshot = new GenericSet<string?> (str_hash, str_equal);
+				foreach (unowned string name in temporary_ignorepkgs) {
+					snapshot.add (name.dup ());
+				}
+				upgrade_ignored_snapshot = snapshot;
+			}
 			transaction.reuse_recent_vcs_sources = reuse_checked_vcs;
 			// Applying a pending Browse/Search operation dismisses only the
 			// update notice. No discovered updates are added to this transaction.
@@ -5142,27 +5166,40 @@ namespace Pamac {
 			scroll_to_top = false;
 			updates_checked = verified_full_upgrade || restore_unmodified_updates;
 			if (verified_full_upgrade) {
-				// A successful upgrade clears the actionable snapshot. Retain
-				// ONLY explicitly ignored rows to preserve Pamac's traditional
-				// circular-arrow display. These rows are presentation-only and
-				// cannot initiate another transaction until a fresh check.
+				// Treat the successful upgrade as an authoritative completion.
+				// Only display exclusions captured BEFORE the transaction, not
+				// the mutable ignore set affected by GTK's state notifications.
+				// Also discard packages which have reached the displayed version:
+				// they are no longer outstanding upgrades, ignored or otherwise.
 				var ignored_repos = new GenericArray<AlpmPackage> ();
-				foreach (unowned AlpmPackage pkg in repos_updates) {
-					if (temporary_ignorepkgs.contains (pkg.name)) {
-						ignored_repos.add (pkg);
-					}
-				}
 				var ignored_aur = new GenericArray<AURPackage> ();
-				foreach (unowned AURPackage pkg in aur_updates) {
-					if (temporary_ignorepkgs.contains (pkg.name)) {
-						ignored_aur.add (pkg);
-					}
-				}
 				var ignored_flatpak = new GenericArray<FlatpakPackage> ();
-				foreach (unowned FlatpakPackage pkg in flatpak_updates) {
-					if (temporary_ignorepkgs.contains (pkg.name) ||
-						temporary_ignorepkgs.contains (pkg.id)) {
-						ignored_flatpak.add (pkg);
+				var snapshot = upgrade_ignored_snapshot;
+				temporary_ignorepkgs.remove_all ();
+				if (snapshot != null) {
+					foreach (unowned string name in snapshot) {
+						temporary_ignorepkgs.add (name.dup ());
+					}
+					foreach (unowned AlpmPackage pkg in repos_updates) {
+						if (snapshot.contains (pkg.name)) {
+							unowned AlpmPackage? installed = database.get_installed_pkg (pkg.name);
+							if (installed == null || installed.version != pkg.version) {
+								ignored_repos.add (pkg);
+							}
+						}
+					}
+					foreach (unowned AURPackage pkg in aur_updates) {
+						if (snapshot.contains (pkg.name)) {
+							unowned AlpmPackage? installed = database.get_installed_pkg (pkg.name);
+							if (installed == null || installed.version != pkg.version) {
+								ignored_aur.add (pkg);
+							}
+						}
+					}
+					foreach (unowned FlatpakPackage pkg in flatpak_updates) {
+						if (snapshot.contains (pkg.name) || snapshot.contains (pkg.id)) {
+							ignored_flatpak.add (pkg);
+						}
 					}
 				}
 				repos_updates = ignored_repos;
@@ -5170,6 +5207,7 @@ namespace Pamac {
 				flatpak_updates = ignored_flatpak;
 				retained_ignored_updates_after_upgrade = true;
 			}
+			upgrade_ignored_snapshot = null;
 			if (view_stack.visible_child_name == "updates" && restore_unmodified_updates) {
 				// Failed preparation: the packages never reached the commit
 				// stage. Restore the prior update list and keep error details.
