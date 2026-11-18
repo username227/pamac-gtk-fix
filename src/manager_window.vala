@@ -2865,6 +2865,12 @@ namespace Pamac {
 				row.action_icon.icon_name = "software-update-symbolic";
 			}
 			row.action_togglebutton.toggled.connect ((button) => {
+				// Transaction-summary and post-upgrade list refreshes change
+				// toggle state programmatically. They must not be interpreted
+				// as user requests to ignore an otherwise selected upgrade.
+				if (transaction_running || retained_ignored_updates_after_upgrade) {
+					return;
+				}
 				if (button.active) {
 					row.action_togglebutton.active = true;
 					row.action_icon.icon_name = "software-select-symbolic";
