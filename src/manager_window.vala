@@ -4317,6 +4317,19 @@ namespace Pamac {
 
 		void set_background_check_running (bool running) {
 			update_check_in_progress = running;
+			// A repository/AUR metadata refresh uses TransactionGtk internally,
+			// but it is NOT a package transaction. Never show its progress bar
+			// below the Updates page alongside the separate VCS scan.
+			// Keep the ordinary checking page and header progress available.
+			if (running) {
+				transaction.progress_box.visible = false;
+			} else {
+				// Discard completed metadata-refresh progress before revealing the
+				// transaction controls again. set_pending_operations() will then
+				// restore the download-size / pending-operations label as needed.
+				transaction.reset_progress_box ();
+				transaction.progress_box.visible = true;
+			}
 			if (running) {
 				background_updates_notice_pending = false;
 				background_check_button.visible = true;
