@@ -5039,6 +5039,10 @@ namespace Pamac {
 					updates_listbox.select_row (updates_listbox.get_row_at_index (0));
 				}
 				on_updates_listbox_row_activated (updates_listbox.get_selected_row ());
+				if (retained_ignored_updates_after_upgrade) {
+					// Nothing here is eligible for Ignore all until refreshed.
+					ignore_all_button.visible = false;
+				}
 				set_pending_operations ();
 			}
 		}
