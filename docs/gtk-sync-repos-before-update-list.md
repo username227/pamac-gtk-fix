@@ -114,3 +114,45 @@ Additional manual regression checks:
    the check completes.
 
 This is a source-only correction, not yet compiled or exercised locally.
+
+## Completed upgrades with intentionally ignored updates
+
+A successful upgrade that leaves explicitly excluded packages (e.g.
+`muffin` while testing a new Cinnamon release) is not a failed or
+incomplete transaction. Previously `run_sysupgrade()` demanded
+`temporary_ignorepkgs.length == 0` before identifying an otherwise
+complete upgrade. Because configured `IgnorePkg` entries are also
+copied into `temporary_ignorepkgs` when the GTK updates list is built,
+even permanent ignores prevented the coordinator's successful
+completion notification. The result was an ambiguous **Update status
+not verified** page and a tray icon stuck on its previous red state.
+
+The completion classification no longer rejects intentional ignore
+selections. It still requires a compatible default-profile check,
+verified discovery (or an explicit forced refresh), an actual successful
+transaction, and non-download-only/non-dry-run/non-no-refresh options.
+The coordinator therefore receives the successful complete-selection
+event and can clear the tray notification without repeating VCS scans.
+
+**Scope note:** The coordinator's next *independent* discovery uses
+`/etc/pamac.conf` ignore preferences. Packages excluded only for one
+GTK transaction, but not configured in the persistent ignore settings,
+can legitimately reappear on a later check. Keeping a transient
+exclusion hidden across future checks is a different feature and is
+not implemented here.
+
+Regression tests:
+
+1. Keep a repository package persistently ignored in Pamac, with another
+   repository or AUR update available. Check and apply the nonignored
+   upgrades. The GUI should not show **Update status not verified**;
+   the tray should turn white without rescanning the ignored package.
+2. Repeat with mixed repository and VCS updates, keeping the ignored
+   package excluded and checking that the VCS snapshot is reused.
+3. Confirm the ignored package is never installed by the upgrade.
+4. A failed transaction, incomplete discovery, dry run, download-only
+   operation, or profile mismatch must continue to be unverified.
+5. A one-time GUI exclusion may be visible to the tray's *next*
+   independent check; a persistent `IgnorePkg` exclusion should not.
+
+Source change not yet compiled or locally regression-tested.
