@@ -4586,7 +4586,31 @@ namespace Pamac {
 				"Could not complete the update check. Try again.");
 		}
 
-		void start_shared_update_check (bool check_aur_updates_backup) {
+		// Use the same verified native fallback for an expired coordinator
+		// snapshot and for a typed result that changed after repo sync.
+		void start_native_update_check_after_join (bool check_aur_updates_backup) {
+			uint64 tray_epoch = begin_tray_snapshot ();
+			update_database.get_updates_async.begin ((obj, res) => {
+				update_database.config.check_aur_updates = check_aur_updates_backup;
+				var updates = update_database.get_updates_async.end (res);
+				if (update_database.vcs_updates_deferred ||
+					!update_database.last_vcs_refresh_success) {
+					shared_update_incomplete (
+						update_database.vcs_updates_deferred ? 101 : 102);
+					request_immediate_tray_check ();
+					return;
+				}
+				if (!update_database.last_flatpak_updates_success) {
+					shared_update_incomplete (103);
+					return;
+				}
+				shared_update_check_in_progress = false;
+				publish_tray_snapshot (tray_epoch, updates);
+				apply_update_lists (updates);
+			});
+		}
+
+		void start_shared_update_check (bool check_aur_updates_backup, bool after_repo_sync = false) {
 			try {
 				// Join only a running or cached check. A fresh GTK view must
 				// not launch the standalone worker's database refresh.
@@ -4614,27 +4638,8 @@ namespace Pamac {
 						warning ("Shared update check failed: %s", e.message);
 					}
 					if (result == 104) {
-						// Nothing to reuse. Execute the original native typed
-						// query, with no coordinator-initiated DB changes.
-						uint64 tray_epoch = begin_tray_snapshot ();
-						update_database.get_updates_async.begin ((obj2, res2) => {
-							update_database.config.check_aur_updates = check_aur_updates_backup;
-							var updates = update_database.get_updates_async.end (res2);
-							if (update_database.vcs_updates_deferred ||
-								!update_database.last_vcs_refresh_success) {
-								shared_update_incomplete (
-									update_database.vcs_updates_deferred ? 101 : 102);
-								request_immediate_tray_check ();
-								return;
-							}
-							if (!update_database.last_flatpak_updates_success) {
-								shared_update_incomplete (103);
-								return;
-							}
-							shared_update_check_in_progress = false;
-							publish_tray_snapshot (tray_epoch, updates);
-							apply_update_lists (updates);
-						});
+						// No recent verified coordinator result: native source scan.
+						start_native_update_check_after_join (check_aur_updates_backup);
 						return;
 					}
 					if (result != 0 && result != 100) {
@@ -4656,8 +4661,22 @@ namespace Pamac {
 						if (!update_database.last_vcs_refresh_success ||
 							!update_database.last_flatpak_updates_success ||
 							!Database.updates_match_shared_output (updates, shared_output)) {
-							shared_update_incomplete (103);
+							// The repository sync can expose a newer set of packages
+							// than the tray's snapshot. Preserve completeness by
+							// performing one native source scan instead of failing.
+							if (after_repo_sync && update_database.last_vcs_refresh_success &&
+								update_database.last_flatpak_updates_success) {
+								if (Environment.get_variable ("PAMAC_DEBUG_VCS_REUSE") == "1") {
+									message ("Tray VCS reuse rejected: newly synchronized update set differs");
+								}
+								start_native_update_check_after_join (check_aur_updates_backup);
+							} else {
+								shared_update_incomplete (103);
+							}
 							return;
+						}
+						if (after_repo_sync && Environment.get_variable ("PAMAC_DEBUG_VCS_REUSE") == "1") {
+							message ("Reused verified tray VCS result after refreshing repositories");
 						}
 						shared_update_check_in_progress = false;
 						apply_update_lists (updates);
@@ -4740,18 +4759,21 @@ namespace Pamac {
 						database.config.check_aur_updates && !local_config.software_mode;
 					update_database.config.check_aur_vcs_updates =
 						update_database.config.check_aur_updates && database.config.check_aur_vcs_updates;
-					uint64 tray_epoch = 0;
+					// The tray may have verified the same VCS sources moments
+					// ago. Check its short-lived snapshot after synchronizing the
+					// pacman databases, before running a second source scan.
 					if (shared_profile) {
-						tray_epoch = begin_tray_snapshot ();
-					} else {
-						try {
-							UpdateCoordinator coordinator = Bus.get_proxy_sync (
-								BusType.SESSION, "org.manjaro.pamac.UpdateCoordinator1",
-								"/org/manjaro/pamac/UpdateCoordinator1");
-							coordinator.invalidate ();
-						} catch (Error e) {
-							message ("Coordinator cache unavailable: %s", e.message);
-						}
+						shared_update_check_in_progress = true;
+						start_shared_update_check (check_aur_updates_backup, true);
+						return;
+					}
+					try {
+						UpdateCoordinator coordinator = Bus.get_proxy_sync (
+							BusType.SESSION, "org.manjaro.pamac.UpdateCoordinator1",
+							"/org/manjaro/pamac/UpdateCoordinator1");
+						coordinator.invalidate ();
+					} catch (Error e) {
+						message ("Coordinator cache unavailable: %s", e.message);
 					}
 					update_database.get_updates_async.begin ((obj, res) => {
 						update_database.config.check_aur_updates = check_aur_updates_backup;
@@ -4767,13 +4789,9 @@ namespace Pamac {
 							shared_update_incomplete (103);
 							return;
 						}
-						if (shared_profile) {
-							publish_tray_snapshot (tray_epoch, updates);
-						} else {
-							// The GUI used a different AUR/Flatpak scope. The tray
-							// must independently verify its own default profile.
-							request_immediate_tray_check ();
-						}
+						// This branch has a different AUR/Flatpak scope; the
+						// tray independently verifies its default profile.
+						request_immediate_tray_check ();
 						apply_update_lists (updates);
 					});
 				});
