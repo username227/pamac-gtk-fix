@@ -475,6 +475,8 @@ namespace Pamac {
 
 		public bool enable_aur { get; private set; }
 		bool updates_checked;
+		// Retained ignored rows are informational until another full discovery.
+		bool retained_ignored_updates_after_upgrade = false;
 		uint64 tray_transaction_id = 0;
 		bool tray_full_upgrade_in_progress = false;
 		bool previously_checked_updates_before_transaction = false;
@@ -1164,7 +1166,7 @@ namespace Pamac {
 					} else {
 						transaction.progress_box.action_label.label = "";
 					}
-					if (to_update.length > 0) {
+					if (to_update.length > 0 && !retained_ignored_updates_after_upgrade) {
 						apply_button.sensitive = true;
 						apply_button.add_css_class ("suggested-action");
 					} else {
@@ -2850,7 +2852,10 @@ namespace Pamac {
 				row.repo_label.set_markup ("<span foreground='grey'>%s</span>".printf (pkg.repo));
 			}
 			set_row_app_icon (row, pkg);
-			if (transaction.transaction_summary_contains (pkg.id)) {
+			if (transaction.transaction_summary_contains (pkg.id) ||
+				retained_ignored_updates_after_upgrade) {
+				// An ignored package retained after a successful upgrade is a
+				// display-only reminder, not a fresh actionable update snapshot.
 				row.action_togglebutton.sensitive = false;
 			}
 			if (!(pkg.name in temporary_ignorepkgs)) {
@@ -4182,6 +4187,11 @@ namespace Pamac {
 		}
 
 		void run_sysupgrade (bool force_refresh = false, bool no_confirm_upgrade = true) {
+			// An ignored-only display after an upgrade is not a new update
+			// discovery result; require Refresh before another Apply.
+			if (retained_ignored_updates_after_upgrade && !force_refresh) {
+				return;
+			}
 			if (!can_start_gui_transaction ()) {
 				return;
 			}
@@ -4447,6 +4457,7 @@ namespace Pamac {
 		// ignored/out-of-date/Flatpak handling. The shared worker only
 		// supplies the *refreshed source state*, never package UI strings.
 		void apply_update_lists (Updates updates) {
+			retained_ignored_updates_after_upgrade = false;
 			repos_updates = new GenericArray<AlpmPackage> ();
 			foreach (unowned AlpmPackage pkg in updates.repos_updates) {
 				repos_updates.add (pkg);
@@ -4681,6 +4692,7 @@ namespace Pamac {
 				return;
 			}
 			update_check_failed = false;
+			retained_ignored_updates_after_upgrade = false;
 			repository_sync_in_progress = refresh_dbs;
 			vcs_check_in_progress = false;
 			// A fresh ALPM snapshot avoids reusing possibly stale handles.
@@ -5081,11 +5093,33 @@ namespace Pamac {
 			scroll_to_top = false;
 			updates_checked = verified_full_upgrade || restore_unmodified_updates;
 			if (verified_full_upgrade) {
-				// A full successful default-profile upgrade is itself the
-				// completed check. Clear the GUI's applied update lists, too.
-				repos_updates = new GenericArray<AlpmPackage> ();
-				aur_updates = new GenericArray<AURPackage> ();
-				flatpak_updates = new GenericArray<FlatpakPackage> ();
+				// A successful upgrade clears the actionable snapshot. Retain
+				// ONLY explicitly ignored rows to preserve Pamac's traditional
+				// circular-arrow display. These rows are presentation-only and
+				// cannot initiate another transaction until a fresh check.
+				var ignored_repos = new GenericArray<AlpmPackage> ();
+				foreach (unowned AlpmPackage pkg in repos_updates) {
+					if (temporary_ignorepkgs.contains (pkg.name)) {
+						ignored_repos.add (pkg);
+					}
+				}
+				var ignored_aur = new GenericArray<AURPackage> ();
+				foreach (unowned AURPackage pkg in aur_updates) {
+					if (temporary_ignorepkgs.contains (pkg.name)) {
+						ignored_aur.add (pkg);
+					}
+				}
+				var ignored_flatpak = new GenericArray<FlatpakPackage> ();
+				foreach (unowned FlatpakPackage pkg in flatpak_updates) {
+					if (temporary_ignorepkgs.contains (pkg.name) ||
+						temporary_ignorepkgs.contains (pkg.id)) {
+						ignored_flatpak.add (pkg);
+					}
+				}
+				repos_updates = ignored_repos;
+				aur_updates = ignored_aur;
+				flatpak_updates = ignored_flatpak;
+				retained_ignored_updates_after_upgrade = true;
 			}
 			if (view_stack.visible_child_name == "updates" && restore_unmodified_updates) {
 				// Failed preparation: the packages never reached the commit
