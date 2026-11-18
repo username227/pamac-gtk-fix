@@ -2896,6 +2896,16 @@ namespace Pamac {
 					child = child.get_next_sibling ();
 					continue;
 				}
+				if (retained_ignored_updates_after_upgrade &&
+					view_stack.visible_child_name == "updates") {
+					// A later list refresh must not make a retained stale
+					// package row actionable again before a new discovery.
+					pamac_row.action_togglebutton.active = false;
+					pamac_row.action_togglebutton.sensitive = false;
+					pamac_row.action_icon.icon_name = "software-update-symbolic";
+					child = child.get_next_sibling ();
+					continue;
+				}
 				if (transaction.transaction_summary_contains (pkg.id)) {
 					pamac_row.action_togglebutton.active = false;
 					pamac_row.action_togglebutton.sensitive = false;
@@ -4965,6 +4975,11 @@ namespace Pamac {
 				}
 				updates_ignored_row.visible = temporary_ignorepkgs.length > 0;
 				show_sidebar (!local_config.software_mode);
+				if (retained_ignored_updates_after_upgrade) {
+					// Category-specific views hide ignored entries; after a
+					// successful upgrade show the preserved ignored rows in All.
+					updates_listbox.select_row (updates_listbox.get_row_at_index (0));
+				}
 				on_updates_listbox_row_activated (updates_listbox.get_selected_row ());
 				set_pending_operations ();
 			}
