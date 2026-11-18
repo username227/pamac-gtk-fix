@@ -82,3 +82,38 @@ Additional tests:
 
 This correction is committed for testing but **not yet built or
 runtime-verified**.
+
+## Follow-up: actual Updates list toggle callback (2026-11-18, 18:26)
+
+The first attempt only guarded `create_update_row()`, which creates
+rows for the optional OS Updates dialog. The main Updates page instead
+renders `create_packagelist_row()` via `complete_packages_list()`.
+Its `is_update` callback still interpreted programmatic checkbox
+deactivations from `refresh_listbox_buttons()` as explicit ignore
+choices. This explains why `iptvnator-git` appeared with the ignored
+symbol after its previous successful upgrade, and remained marked
+ignored when a newer VCS revision was discovered.
+
+Corrected on this same combined GTK test branch:
+
+- Guard the real main-list update checkbox callback during transactions,
+  post-upgrade retained-only display and programmatic list-button refresh.
+- Prevent reentrant `refresh_listbox_buttons()` updates from modifying
+  selection/ignore state through nested widget signals.
+- Capture an immutable *pre-transaction* snapshot of intentional ignore
+  selections. After verified completion retain only the snapshot's
+  outstanding candidates, **not** the mutable set after widget signals.
+- Confirm an ALPM/AUR candidate is not already installed at its displayed
+  version before preserving it as ignored. Reconstruct the transient
+  ignored-name set exclusively from the remaining display-only rows so
+  upgraded packages do not stay falsely ignored on future scans.
+- Hide `Ignore all` during the post-upgrade ignored-only display.
+
+Regression verification: upgrade `iptvnator-git` while ignoring only
+`muffin`. The main list must not mark IPTVnator ignored in the
+transaction summary or after completion; it should disappear from
+post-upgrade ignored reminders. If a new VCS revision arrives on the
+next scan, it must be actionable by default. Muffin remains ignored
+and the tray is cleared immediately.
+
+This updated correction is not yet compiled or locally tested.
