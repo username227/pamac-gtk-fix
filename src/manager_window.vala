@@ -4204,9 +4204,13 @@ namespace Pamac {
 					transaction.add_flatpak_to_upgrade (pkg);
 				}
 			}
+			// Explicit exclusions are not an incomplete transaction: upgrading
+			// every selected package is a full upgrade for that selection.
+			// libpamac applies temporary_ignorepkgs during transaction setup.
+			// The tray's next independent check still follows /etc/pamac.conf;
+			// one-time exclusions may reappear unless configured persistently.
 			bool full_default_upgrade =
 				tray_profile_compatible () &&
-				temporary_ignorepkgs.length == 0 &&
 				(updates_checked || force_refresh) &&
 				!transaction.download_only && !transaction.dry_run &&
 				!transaction.no_refresh;
