@@ -4332,6 +4332,83 @@ namespace Pamac {
 			return count;
 		}
 
+		// Keep AdwViewSwitcher navigation native: only the refresh glyph
+		// receives a separate click target. Both horizontal and vertical
+		// icon instances are installed (header and responsive bottom bar).
+		void collect_updates_refresh_images (Gtk.Widget widget,
+			GenericArray<Gtk.Image> images) {
+			var image = widget as Gtk.Image;
+			if (image != null && image.icon_name == "view-refresh-symbolic") {
+				images.add (image);
+			}
+			for (unowned Gtk.Widget? child = widget.get_first_child ();
+				child != null; child = child.get_next_sibling ()) {
+				collect_updates_refresh_images (child, images);
+			}
+		}
+
+		void install_updates_refresh_icons (Gtk.Widget switcher) {
+			var images = new GenericArray<Gtk.Image> ();
+			collect_updates_refresh_images (switcher, images);
+			foreach (unowned Gtk.Image found_image in images) {
+				Gtk.Widget? indicator = found_image.get_parent ();
+				// The libadwaita view switcher places the icon inside an
+				// AdwIndicatorBin with a writable GtkWidget child property.
+				// If this private structure changes, skip rather than affect
+				// the surrounding navigation buttons.
+				if (indicator == null ||
+					indicator.get_type ().name () != "AdwIndicatorBin") {
+					continue;
+				}
+				// Keep the original GtkImage and its live icon-name binding.
+				// A strong ref is required during the temporary unparenting.
+				Gtk.Image icon = (Gtk.Image) found_image.ref ();
+				Value cleared = Value (typeof (Gtk.Widget));
+				cleared.set_object (null);
+				indicator.set_property ("child", cleared);
+				var icon_stack = new Gtk.Stack ();
+				icon_stack.transition_type = Gtk.StackTransitionType.NONE;
+				icon_stack.add_named (icon, "idle");
+				var spinner = new Gtk.Spinner ();
+				spinner.width_request = 16;
+				spinner.height_request = 16;
+				icon_stack.add_named (spinner, "busy");
+				icon_stack.visible_child_name = "idle";
+				icon_stack.tooltip_text = dgettext (null, "Refresh updates");
+				var click = new Gtk.GestureClick ();
+				click.button = 1;
+				click.set_propagation_phase (Gtk.PropagationPhase.CAPTURE);
+				click.pressed.connect ((n_press, x, y) => {
+					// Do not let icon clicks activate the containing Updates tab.
+					click.set_state (Gtk.EventSequenceState.CLAIMED);
+					if (n_press == 1 && !update_check_in_progress &&
+						!transaction_running && !generate_mirrors_list &&
+						!repository_sync_in_progress) {
+						refresh_updates (true);
+					}
+				});
+				icon_stack.add_controller (click);
+				Value child_value = Value (typeof (Gtk.Widget));
+				child_value.set_object (icon_stack);
+				indicator.set_property ("child", child_value);
+				updates_refresh_icons.add (icon_stack);
+				updates_refresh_spinners.add (spinner);
+			}
+		}
+
+		void set_updates_refresh_indicator (bool running) {
+			foreach (unowned Gtk.Stack icon_stack in updates_refresh_icons) {
+				icon_stack.visible_child_name = running ? "busy" : "idle";
+			}
+			foreach (unowned Gtk.Spinner spinner in updates_refresh_spinners) {
+				if (running) {
+					spinner.start ();
+				} else {
+					spinner.stop ();
+				}
+			}
+		}
+
 		void show_background_updates_notice () {
 			// Never announce a partial scan or a result already being viewed.
 			if (!updates_checked || update_check_failed ||
