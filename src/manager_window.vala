@@ -2641,8 +2641,6 @@ namespace Pamac {
 					if (button.active) {
 						to_update.add (pkg.id);
 						temporary_ignorepkgs.remove (pkg.id);
-						// remove from config.ignorepkgs to override config
-						database.config.ignorepkgs.remove (pkg.id);
 					} else {
 						to_update.remove (pkg.id);
 						temporary_ignorepkgs.add (pkg.id);
@@ -2865,8 +2863,6 @@ namespace Pamac {
 					row.action_icon.icon_name = "software-select-symbolic";
 					to_update.add (pkg.name);
 					temporary_ignorepkgs.remove (pkg.name);
-					// remove from config.ignorepkgs to override config
-					database.config.ignorepkgs.remove (pkg.name);
 				} else {
 					row.action_togglebutton.active = false;
 					row.action_icon.icon_name = "software-update-symbolic";
@@ -4221,6 +4217,16 @@ namespace Pamac {
 				|| aur_updates.length > 0) {
 				foreach (unowned string name in temporary_ignorepkgs) {
 					transaction.add_temporary_ignore_pkg (name);
+				}
+				// IgnorePkg is persistent in /etc/pacman.conf, but a user
+				// selection here is a one-transaction exception. Do not mutate
+				// database.config.ignorepkgs: libpamac reloads that file during
+				// preparation, losing any previous in-memory removal.
+				foreach (unowned string name in to_update) {
+					if (database.config.ignorepkgs.contains (name) &&
+						!temporary_ignorepkgs.contains (name)) {
+						transaction.add_explicitly_selected_ignored_update (name);
+					}
 				}
 				transaction.add_pkgs_to_upgrade (transaction_refresh);
 			}
