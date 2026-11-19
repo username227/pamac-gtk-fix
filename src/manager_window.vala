@@ -5184,7 +5184,7 @@ namespace Pamac {
 					foreach (unowned AlpmPackage pkg in repos_updates) {
 						if (snapshot.contains (pkg.name)) {
 							unowned AlpmPackage? installed = database.get_installed_pkg (pkg.name);
-							if (installed == null || installed.version != pkg.version) {
+							if (installed == null || installed.installed_version != pkg.version) {
 								ignored_repos.add (pkg);
 								temporary_ignorepkgs.add (pkg.name.dup ());
 							}
@@ -5193,7 +5193,7 @@ namespace Pamac {
 					foreach (unowned AURPackage pkg in aur_updates) {
 						if (snapshot.contains (pkg.name)) {
 							unowned AlpmPackage? installed = database.get_installed_pkg (pkg.name);
-							if (installed == null || installed.version != pkg.version) {
+							if (installed == null || installed.installed_version != pkg.version) {
 								ignored_aur.add (pkg);
 								temporary_ignorepkgs.add (pkg.name.dup ());
 							}
