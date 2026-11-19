@@ -117,3 +117,30 @@ next scan, it must be actionable by default. Muffin remains ignored
 and the tray is cleared immediately.
 
 This updated correction is not yet compiled or locally tested.
+
+
+## Regression: configured ignored repository update disappears after upgrade (2026-11-18, 20:06)
+
+Observed: `muffin` 6.8.4-1 -> 6.8.4-2 remained correctly ignored while
+`python-caldav` was selected. After completing the upgrade, the GTK
+Updates page incorrectly displayed "Your system is up to date". Clicking
+Refresh restored the ignored `muffin` row.
+
+Root cause: the post-upgrade retention test used
+`database.get_installed_pkg(name).version`, which in libpamac's
+`AlpmPackageLinked` resolves to the current *sync repository* version
+when one exists. Thus comparing `installed.version != pkg.version`
+compared the candidate against itself and discarded the ignored row.
+
+Correction in GTK only: compare `installed.installed_version`, the
+locally installed ALPM version, to the candidate `pkg.version`.
+Both retained repository and AUR update paths were corrected.
+
+Retest: with `muffin` 6.8.4-1 held and repo candidate 6.8.4-2,
+upgrade an unrelated package. Immediately after success, `muffin`
+must still appear with the circular-arrow icon (display-only) without
+pressing Refresh. The tray should clear; a subsequent manual Refresh
+should continue showing `muffin` as ignored. Also verify a successfully
+upgraded AUR package does not remain ignored as a stale row.
+
+This fix is code reviewed but not compiler-/runtime-verified.
