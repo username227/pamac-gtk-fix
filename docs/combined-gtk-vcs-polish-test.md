@@ -178,3 +178,26 @@ Manual regression tests (not yet built or runtime verified):
   switcher. Check that the header/footer labels retain normal proportions.
 - Verify the extra header banner never reappears and the tray still
   receives completed update results.
+
+
+## Superseding UX: selectable post-upgrade ignored rows (2026-11-18)
+
+The earlier notes above described retained ignored rows as **display-only**
+with disabled action toggles. That was the original safety implementation,
+not the current behavior. After further user testing confirmed successful
+upgrades disappear from the list, ignored updates persist, and tray sync
+works, the user requested restoration of Pamac's normal selection UX.
+
+Commit `855ffd5` allows selecting retained ignored rows **without first
+clicking Refresh**. Apply only becomes active once at least one row is
+selected. Instead of trusting its retained display or even a VCS scan
+within the normal 120-second reuse window, Apply starts an ordinary
+**libpamac transaction-time** update check with `force_refresh=true` and
+`reuse_recent_vcs_sources=false`. Its normal confirmation dialog is
+required because the new repository/AUR scan can discover additional updates.
+The ordinary GTK/CLI upgrade paths and the normal guarded reuse optimization
+remain unchanged. See `retain-ignored-updates-after-upgrade.md` for full tests.
+
+This latest selection/revalidation adjustment is committed but **requires a
+new GTK build and runtime regression**; prior successful builds and tests
+covered the preceding display-only implementation.
