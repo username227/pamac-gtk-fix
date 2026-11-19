@@ -1156,7 +1156,7 @@ namespace Pamac {
 					} else {
 						transaction.progress_box.action_label.label = "";
 					}
-					if (to_update.length > 0 && !retained_ignored_updates_after_upgrade) {
+					if (to_update.length > 0) {
 						apply_button.sensitive = true;
 						apply_button.add_css_class ("suggested-action");
 					} else {
@@ -2635,8 +2635,7 @@ namespace Pamac {
 					row.action_icon.icon_name = "software-select-symbolic";
 				}
 				row.action_togglebutton.toggled.connect ((button) => {
-					if (refreshing_listbox_buttons || transaction_running ||
-						retained_ignored_updates_after_upgrade) {
+					if (refreshing_listbox_buttons || transaction_running) {
 						return;
 					}
 					if (button.active) {
@@ -2846,10 +2845,7 @@ namespace Pamac {
 				row.repo_label.set_markup ("<span foreground='grey'>%s</span>".printf (pkg.repo));
 			}
 			set_row_app_icon (row, pkg);
-			if (transaction.transaction_summary_contains (pkg.id) ||
-				retained_ignored_updates_after_upgrade) {
-				// An ignored package retained after a successful upgrade is a
-				// display-only reminder, not a fresh actionable update snapshot.
+			if (transaction.transaction_summary_contains (pkg.id)) {
 				row.action_togglebutton.sensitive = false;
 			}
 			if (!(pkg.name in temporary_ignorepkgs)) {
@@ -2859,11 +2855,9 @@ namespace Pamac {
 				row.action_icon.icon_name = "software-update-symbolic";
 			}
 			row.action_togglebutton.toggled.connect ((button) => {
-				// Transaction-summary and post-upgrade list refreshes change
-				// toggle state programmatically. They must not be interpreted
-				// as user requests to ignore an otherwise selected upgrade.
-				if (refreshing_listbox_buttons || transaction_running ||
-					retained_ignored_updates_after_upgrade) {
+				// Transaction-summary refreshes may change toggle state
+				// programmatically; only honor intentional user selections.
+				if (refreshing_listbox_buttons || transaction_running) {
 					return;
 				}
 				if (button.active) {
@@ -2898,16 +2892,6 @@ namespace Pamac {
 				}
 				Package? pkg = pamac_row.pkg;
 				if (pkg == null) {
-					child = child.get_next_sibling ();
-					continue;
-				}
-				if (retained_ignored_updates_after_upgrade &&
-					view_stack.visible_child_name == "updates") {
-					// A later list refresh must not make a retained stale
-					// package row actionable again before a new discovery.
-					pamac_row.action_togglebutton.active = false;
-					pamac_row.action_togglebutton.sensitive = false;
-					pamac_row.action_icon.icon_name = "software-update-symbolic";
 					child = child.get_next_sibling ();
 					continue;
 				}
@@ -4213,27 +4197,32 @@ namespace Pamac {
 		}
 
 		void run_sysupgrade (bool force_refresh = false, bool no_confirm_upgrade = true) {
-			// An ignored-only display after an upgrade is not a new update
-			// discovery result; require Refresh before another Apply.
-			if (retained_ignored_updates_after_upgrade && !force_refresh) {
+			// Retained ignored packages can be selected again, but their
+			// displayed versions are not a newly verified update snapshot.
+			// The actual transaction must refresh sources from scratch.
+			bool recheck_retained_selection =
+				retained_ignored_updates_after_upgrade && to_update.length > 0;
+			if (retained_ignored_updates_after_upgrade &&
+				!recheck_retained_selection && !force_refresh) {
 				return;
 			}
+			bool transaction_refresh = force_refresh || recheck_retained_selection;
 			if (!can_start_gui_transaction ()) {
 				return;
 			}
 			// Incomplete discovery is not an actionable upgrade snapshot.
-			if (!force_refresh && !updates_checked) {
+			if (!transaction_refresh && !updates_checked) {
 				show_in_app_notification (dgettext (null,
 					"Complete the update check before upgrading"));
 				return;
 			}
-			if (force_refresh
+			if (transaction_refresh
 				|| repos_updates.length > 0
 				|| aur_updates.length > 0) {
 				foreach (unowned string name in temporary_ignorepkgs) {
 					transaction.add_temporary_ignore_pkg (name);
 				}
-				transaction.add_pkgs_to_upgrade (force_refresh);
+				transaction.add_pkgs_to_upgrade (transaction_refresh);
 			}
 			foreach (unowned FlatpakPackage pkg in flatpak_updates) {
 				if (!temporary_ignorepkgs.contains (pkg.name)) {
@@ -4247,16 +4236,21 @@ namespace Pamac {
 			// one-time exclusions may reappear unless configured persistently.
 			bool full_default_upgrade =
 				tray_profile_compatible () &&
-				(updates_checked || force_refresh) &&
+				(updates_checked || transaction_refresh) &&
 				!transaction.download_only && !transaction.dry_run &&
 				!transaction.no_refresh;
 			// A fresh native GTK check can be reused even when its profile
 			// differs from the tray's default profile. The backend still
 			// checks source fingerprints and installed state under its lock.
-			bool reuse_checked_vcs = updates_checked && !force_refresh &&
+			// A post-upgrade selection must not reuse a VCS check just
+			// because it is younger than the normal two-minute window.
+			bool reuse_checked_vcs = updates_checked && !transaction_refresh &&
 				!transaction.no_refresh && !transaction.download_only &&
 				!transaction.dry_run;
-			run_transaction (no_confirm_upgrade, full_default_upgrade, reuse_checked_vcs);
+			// A fresh check could discover more upgrades; require confirmation
+			// of the final transaction plan rather than applying silently.
+			bool confirm_upgrade = recheck_retained_selection || !no_confirm_upgrade;
+			run_transaction (!confirm_upgrade, full_default_upgrade, reuse_checked_vcs);
 		}
 
 		[GtkCallback]
@@ -5077,7 +5071,7 @@ namespace Pamac {
 				}
 				on_updates_listbox_row_activated (updates_listbox.get_selected_row ());
 				if (retained_ignored_updates_after_upgrade) {
-					// Nothing here is eligible for Ignore all until refreshed.
+					// The retained list already consists of ignored packages.
 					ignore_all_button.visible = false;
 				}
 				set_pending_operations ();
