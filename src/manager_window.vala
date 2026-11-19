@@ -461,10 +461,9 @@ namespace Pamac {
 		public DatabaseGtk database { get; construct; }
 		// Separate ALPM handle for long-running, read-only update discovery.
 		DatabaseGtk update_database;
-		Gtk.Button background_check_button;
-		Gtk.Box background_check_box;
-		Gtk.Spinner background_check_spinner;
-		Gtk.Label background_check_label;
+		// Independently clickable, animated icons inside the native Updates tab.
+		GenericArray<Gtk.Stack> updates_refresh_icons;
+		GenericArray<Gtk.Spinner> updates_refresh_spinners;
 		Gtk.Button retry_update_check_button;
 		public LocalConfig local_config;
 
@@ -653,27 +652,14 @@ namespace Pamac {
 				}
 			});
 			checking_page.child = retry_update_check_button;
-			background_check_box = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6);
-			background_check_spinner = new Gtk.Spinner ();
-			background_check_spinner.visible = false;
-			background_check_label = new Gtk.Label (dgettext (null, "Checking for Updates"));
-			background_check_label.ellipsize = Pango.EllipsizeMode.END;
-			background_check_label.max_width_chars = 25;
-			background_check_box.append (background_check_spinner);
-			background_check_box.append (background_check_label);
-			background_check_button = new Gtk.Button ();
-			background_check_button.has_frame = false;
-			background_check_button.child = background_check_box;
-			background_check_button.visible = false;
-			background_check_button.tooltip_text = dgettext (null,
-				"View update check progress");
-			background_check_button.clicked.connect (() => {
-				// The update count is an invitation to view the list, not
-				// permission to install. Use the same route as the application's
-				// existing Updates action.
-				show_updates_view ();
+			updates_refresh_icons = new GenericArray<Gtk.Stack> ();
+			updates_refresh_spinners = new GenericArray<Gtk.Spinner> ();
+			Idle.add (() => {
+				install_updates_refresh_icons (view_stack_switcher);
+				install_updates_refresh_icons (switcher_bar);
+				set_updates_refresh_indicator (update_check_in_progress);
+				return false;
 			});
-			headerbar.pack_end (background_check_button);
 
 			current_screenshots = new GenericArray<Gtk.Picture> ();
 
@@ -4320,9 +4306,7 @@ namespace Pamac {
 
 		void dismiss_background_updates_notice () {
 			background_updates_notice_pending = false;
-			if (!update_check_in_progress) {
-				background_check_button.visible = false;
-			}
+
 		}
 
 		uint count_actionable_updates () {
@@ -4355,18 +4339,9 @@ namespace Pamac {
 				dismiss_background_updates_notice ();
 				return;
 			}
-			uint count = count_actionable_updates ();
-			background_updates_notice_pending = count > 0;
-			if (background_updates_notice_pending) {
-				background_check_label.label = dngettext (null,
-					"%u update available", "%u updates available", count).printf (count);
-				background_check_button.tooltip_text = dgettext (null,
-					"Click to view available updates");
-				background_check_spinner.visible = false;
-				background_check_button.visible = true;
-			} else {
-				background_check_button.visible = false;
-			}
+			// Keep notification state for normal navigation; the tray and tab
+			// replace the redundant status banner.
+			background_updates_notice_pending = count_actionable_updates () > 0;
 		}
 
 		void set_background_check_running (bool running) {
@@ -4374,7 +4349,7 @@ namespace Pamac {
 			// A repository/AUR metadata refresh uses TransactionGtk internally,
 			// but it is NOT a package transaction. Never show its progress bar
 			// below the Updates page alongside the separate VCS scan.
-			// Keep the ordinary checking page and header progress available.
+			// Keep the ordinary checking page and the tab indicator available.
 			if (running) {
 				transaction.progress_box.visible = false;
 			} else {
@@ -4384,19 +4359,10 @@ namespace Pamac {
 				transaction.reset_progress_box ();
 				transaction.progress_box.visible = true;
 			}
+			set_updates_refresh_indicator (running);
 			if (running) {
 				background_updates_notice_pending = false;
-				background_check_button.visible = true;
-				background_check_spinner.visible = true;
-				background_check_spinner.start ();
-				background_check_label.label = dgettext (null, "Checking for Updates");
-				background_check_button.tooltip_text = dgettext (null,
-					"View update check progress");
 				retry_update_check_button.visible = false;
-			} else {
-				background_check_spinner.stop ();
-				background_check_spinner.visible = false;
-				background_check_button.visible = false;
 			}
 			set_pending_operations ();
 			if (running) {
@@ -4557,7 +4523,6 @@ namespace Pamac {
 			checking_page.title = dgettext (null, "Waiting for another Pamac operation");
 			checking_page.description = dgettext (null,
 				"The AUR build directory is in use. Pamac will check all updates when the operation finishes.");
-			background_check_label.label = dgettext (null, "Waiting for another Pamac operation");
 			this.set_cursor (new Gdk.Cursor.from_name ("default", null));
 			if (aur_unlock_wait_source != 0) {
 				return;
@@ -4944,8 +4909,6 @@ namespace Pamac {
 					current, total, pkgname, description));
 			} else {
 				vcs_check_in_progress = true;
-				background_check_label.label = "%s (%u/%u)".printf (
-					dgettext (null, "Checking development packages"), current, total);
 				checking_page.title = "%s (%u/%u)".printf (
 					dgettext (null, "Checking development packages"), current, total);
 				checking_page.description = "%s — %s".printf (pkgname, description);
@@ -4961,9 +4924,7 @@ namespace Pamac {
 				checking_page.description = "";
 			}
 			checking_page.title = "%s %u".printf (dgettext (null, "Checking for Updates"), percent) + " %";
-			if (update_check_in_progress && !vcs_check_in_progress) {
-				background_check_label.label = checking_page.title;
-			}
+
 		}
 
 		void populate_updates () {
