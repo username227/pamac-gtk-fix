@@ -144,3 +144,37 @@ should continue showing `muffin` as ignored. Also verify a successfully
 upgraded AUR package does not remain ignored as a stale row.
 
 This fix is code reviewed but not compiler-/runtime-verified.
+
+
+## Updates tab: clickable refresh glyph and animated check
+
+The redundant right-side header progress/status button was removed. The
+existing \`view-refresh-symbolic\` glyph inside the native **Updates** tab
+is now an independent click target. The **Updates** label retains ordinary
+tab navigation. While a check is running, the icon changes to a native
+animated \`Gtk.Spinner\`, without explanatory header text. Both the
+header view switcher and responsive bottom view-switcher bar are handled.
+
+The implementation preserves the original icon and its property binding,
+and wraps it in a \`Gtk.Stack\`. A capture-phase click gesture claims
+mouse presses in the icon region before the surrounding tab can navigate.
+This uses libadwaita's currently private \`AdwIndicatorBin\` child property;
+if that internal structure changes, the injection skips it rather than
+interfering with the other tabs.
+
+Manual regression tests (not yet built or runtime verified):
+
+- From Browse and Installed, click only the refresh glyph next to Updates.
+  A fresh repository/AUR/VCS check must start **without selecting Updates**.
+- Click the Updates text separately. It should navigate to that tab without
+  starting a redundant check.
+- While checking, the glyph must become a visible, moving spinner even
+  when another tab is selected.
+- Clicking the spinner during a check must not launch a second check;
+  clicking during an active package transaction must not start a check.
+- On success or failure, the spinner must stop and the circular-arrow
+  icon return; clicking it again should work.
+- Below the 550sp breakpoint, verify the corresponding icon in the bottom
+  switcher. Check that the header/footer labels retain normal proportions.
+- Verify the extra header banner never reappears and the tray still
+  receives completed update results.
