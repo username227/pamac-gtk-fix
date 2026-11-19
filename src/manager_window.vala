@@ -4306,7 +4306,6 @@ namespace Pamac {
 
 		void dismiss_background_updates_notice () {
 			background_updates_notice_pending = false;
-
 		}
 
 		uint count_actionable_updates () {
