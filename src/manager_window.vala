@@ -4360,8 +4360,8 @@ namespace Pamac {
 					continue;
 				}
 				// Keep the original GtkImage and its live icon-name binding.
-				// A strong ref is required during the temporary unparenting.
-				Gtk.Image icon = (Gtk.Image) found_image.ref ();
+				// The owned local reference keeps it alive while unparented.
+				Gtk.Image icon = found_image;
 				Value cleared = Value (typeof (Gtk.Widget));
 				cleared.set_object (null);
 				indicator.set_property ("child", cleared);
